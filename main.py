@@ -44,10 +44,6 @@ def get_active_clients() -> List[Tuple[str, Optional[str]]]:
 
 def get_net_usage_by_ip() -> Dict[str, Tuple[int, int]]:
     api, conn = get_api()
-    api.get_binary_resource('/').call('tool/sniffer/stop')
-    api.get_binary_resource('/').call('tool/sniffer/start')
-    sleep(5)
-    api.get_binary_resource('/').call('tool/sniffer/stop')
     ip_speed: Dict[str, Tuple[int, int]] = {}
     packets = api.get_resource('/tool/sniffer/host').get()
     conn.disconnect()
@@ -72,7 +68,7 @@ def web_root() -> Response:
 @app.route('/api/active-clients')
 def api_active_clients() -> Response:
     lock: Lock = CACHE['active-clients'][2]
-    if not lock.locked() and time() - CACHE['active-clients'][1] > 7:
+    if not lock.locked() and time() - CACHE['active-clients'][1] >= 2:
         lock.acquire()
         try:
             # noinspection PyTypeChecker
@@ -87,7 +83,7 @@ def api_active_clients() -> Response:
 @app.route('/api/net-usage-by-ip')
 def api_net_usage_by_ip() -> Response:
     lock: Lock = CACHE['net-usage-by-ip'][2]
-    if not lock.locked() and time() - CACHE['net-usage-by-ip'][1] > 7:
+    if not lock.locked() and time() - CACHE['net-usage-by-ip'][1] >= 2:
         lock.acquire()
         try:
             # noinspection PyTypeChecker
