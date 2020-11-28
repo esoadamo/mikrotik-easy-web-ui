@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css"
+          integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"
+            integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN"
+            crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"
+            integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q"
+            crossorigin="anonymous"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"
+            integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl"
+            crossorigin="anonymous"></script>
+
+    <title>Home net monitor</title>
+</head>
+<body>
+<div class="container">
+    <div class="row">
+        <div class="col-lg-6">
+            <h2>Usage by IP</h2>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>IP</th>
+                        <th>Download</th>
+                        <th>Upload</th>
+                    </tr>
+                    </thead>
+                    <tbody id="net-usage-by-ip">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <h2>Active clients</h2>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>IP</th>
+                    </tr>
+                    </thead>
+                    <tbody id="active-clients">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.onload = () => {
+        const tBodyActiveClients = document.getElementById('active-clients')
+        const getActiveClients = async () => {
+            let data = await (await fetch('api/active-clients')).json();
+            tBodyActiveClients.innerHTML = '';
+            for (let client of data) {
+                tBodyActiveClients.innerHTML += `<tr><td>${client[1]}</td><td>${client[0]}</td></tr>`;
+            }
+        }
+
+        getActiveClients();
+        setInterval(() => getActiveClients(), 10000);
+
+        const tBodyNetUsageByIp = document.getElementById('net-usage-by-ip')
+        const getNetUsageByIp = async () => {
+            let data = await (await fetch('api/net-usage-by-ip')).json();
+            tBodyNetUsageByIp.innerHTML = '';
+            for (let client of Object.keys(data)) {
+                tBodyNetUsageByIp.innerHTML += `<tr><td>${client}</td><td>${data[client][0]} kB/s</td><td>${data[client][1]} kB/s</td></tr>`;
+            }
+        }
+
+        getNetUsageByIp();
+        setInterval(() => getNetUsageByIp(), 7000);
+    }
+</script>
+</body>
+</html>
