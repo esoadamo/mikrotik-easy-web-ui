@@ -22,7 +22,7 @@
 <div class="container">
     <div class="row">
         <div class="col-lg-6">
-            <h2>Usage by IP</h2>
+            <h2>Usage per IP</h2>
             <div class="table-responsive">
                 <table class="table">
                     <thead>
@@ -57,12 +57,20 @@
 
 <script>
     window.onload = () => {
+         let clientsCache = {'10.1.1.1': 'Router'};
+
         const tBodyActiveClients = document.getElementById('active-clients')
         const getActiveClients = async () => {
             let data = await (await fetch('api/active-clients')).json();
             tBodyActiveClients.innerHTML = '';
+            clientsCache = {'10.1.1.1': 'Router'};
             for (let client of data) {
-                tBodyActiveClients.innerHTML += `<tr><td>${client[1]}</td><td>${client[0]}</td></tr>`;
+                let clientName = client[1];
+                let clientIP = client[0];
+                if (clientName !== null) {
+                    clientsCache[clientIP] = clientName;
+                }
+                tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
             }
         }
 
@@ -74,7 +82,8 @@
             let data = await (await fetch('api/net-usage-by-ip')).json();
             tBodyNetUsageByIp.innerHTML = '';
             for (let client of Object.keys(data)) {
-                tBodyNetUsageByIp.innerHTML += `<tr><td>${client}</td><td>${data[client][0]} kB/s</td><td>${data[client][1]} kB/s</td></tr>`;
+                console.log(clientsCache[client], clientsCache)
+                tBodyNetUsageByIp.innerHTML += `<tr><td>${clientsCache[client] || client}</td><td>${data[client][0]} kB/s</td><td>${data[client][1]} kB/s</td></tr>`;
             }
         }
 
