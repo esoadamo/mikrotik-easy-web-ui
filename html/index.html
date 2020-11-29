@@ -82,7 +82,6 @@
             let data = await (await fetch('api/net-usage-by-ip')).json();
             tBodyNetUsageByIp.innerHTML = '';
             for (let client of Object.keys(data)) {
-                console.log(clientsCache[client], clientsCache)
                 tBodyNetUsageByIp.innerHTML += `<tr><td>${clientsCache[client] || client}</td><td>${data[client][0]} kB/s</td><td>${data[client][1]} kB/s</td></tr>`;
             }
         }

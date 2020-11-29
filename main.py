@@ -56,6 +56,17 @@ def get_net_usage_by_ip() -> Dict[str, Tuple[int, int]]:
         if speed_up + speed_down == 0:
             continue
         ip_speed[ip_from] = (speed_down, speed_up)
+        
+    router_ip = '10.1.1.1'
+    server_ip = '10.1.1.10'
+    if router_ip in ip_speed and server_ip in ip_speed:
+        router_down, router_up = ip_speed[router_ip]
+        server_down, server_up = ip_speed[server_ip]
+        ip_speed[server_ip] = (max(0, server_down - router_up), max(0, server_up - router_down))
+        ip_speed[router_ip] = (max(0, router_up - server_down), max(0, router_down - server_up))
+        for ip in (server_ip, router_ip):
+            if sum(ip_speed[ip]) <= 0:
+                del ip_speed[ip]
 
     return ip_speed
 
