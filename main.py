@@ -55,6 +55,8 @@ def get_active_clients() -> List[Tuple[str, Optional[str]]]:
 def get_net_usage_by_ip() -> Dict[str, Tuple[int, int]]:
     api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
+    if api.get_resource('/tool/sniffer').get()[0]['running'] != 'true':
+        api.get_resource('/tool/sniffer').call('start')
     packets = api.get_resource('/tool/sniffer/host').get()
     conn.disconnect()
     for packet in packets:
@@ -91,8 +93,7 @@ def api_active_clients() -> Response:
     entry = CACHE['active-clients']
     time_to_next_request = entry['nextRequest'] - time()
     lock: Lock = entry['lock']
-    if time_to_next_request < 0 and not lock.locked():
-        lock.acquire()
+    if time_to_next_request < 0 and lock.acquire(blocking=False):
         if entry['nextRequest'] and time_to_next_request < -5 * 60:
             entry['delay'] = 2
         else:
@@ -115,8 +116,7 @@ def api_net_usage_by_ip() -> Response:
     entry = CACHE['net-usage-by-ip']
     time_to_next_request = entry['nextRequest'] - time()
     lock: Lock = entry['lock']
-    if time_to_next_request < 0 and not lock.locked():
-        lock.acquire()
+    if time_to_next_request < 0 and lock.acquire(blocking=False):
         if entry['nextRequest'] and time_to_next_request < -5 * 60:
             entry['delay'] = 2
         else:
