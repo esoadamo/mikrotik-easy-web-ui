@@ -1,10 +1,10 @@
 import json
-from time import time
-from typing import List, Tuple, Optional, Dict
 from random import randint
 from threading import Thread, Lock
+from time import time
+from typing import List, Tuple, Optional, Dict
 
-from flask import Flask, Response, send_from_directory
+from flask import Flask, Response, render_template
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 
@@ -23,7 +23,7 @@ CACHE = {
     }
 }
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='html')
 
 
 def rt(data: any) -> Response:
@@ -85,7 +85,7 @@ def get_net_usage_by_ip() -> Dict[str, Tuple[int, int]]:
 
 @app.route('/')
 def web_root() -> Response:
-    return send_from_directory('html', 'index.html')
+    return render_template('index.html')
 
 
 @app.route('/api/active-clients')
