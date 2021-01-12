@@ -4,7 +4,9 @@ from threading import Thread, Lock
 from time import time
 from typing import List, Tuple, Optional, Dict, Union
 from types import SimpleNamespace
+from time import sleep
 
+import requests
 from flask import Flask, Response, render_template
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
@@ -50,6 +52,13 @@ def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
                            ssl_verify=False,
                            plaintext_login=True)
     return conn.get_api(), conn
+
+
+def get_updates_available() -> bool:
+    api, conn = get_api()
+    res = api.get_resource('/system/package/update').call('check-for-updates')
+    conn.disconnect()
+    return 'available' in res[-1]['status'].lower()
 
 
 def get_active_clients() -> CachedRequestActiveClientsCache:
@@ -118,7 +127,7 @@ def api_active_clients() -> Response:
             finally:
                 lock.release()
 
-        Thread(target=job).start()
+        Thread(target=job, daemon=True).start()
 
     return rt(entry.cache)
 
@@ -141,11 +150,19 @@ def api_net_usage_by_ip() -> Response:
             finally:
                 lock.release()
 
-        Thread(target=job).start()
+        Thread(target=job, daemon=True).start()
     return rt(entry.cache)
 
 
+def thread_check_updates():
+    while True:
+        if get_updates_available():
+            requests.get('https://api.ahlava.cz/msg/Router updates available')
+        sleep((24 + randint(0, 24)) * 3600)
+
+
 def main():
+    Thread(target=thread_check_updates, daemon=True).start()
     app.run(port=8341)
 
 
