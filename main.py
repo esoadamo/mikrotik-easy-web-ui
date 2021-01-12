@@ -25,14 +25,14 @@ class CachedRequest(SimpleNamespace):
 CACHE: Dict[str, CachedRequest] = {
     'active-clients': CachedRequest(
       cache=[],
-      nextRequest=0.0,
-      delay=0.0,
+      nextRequestTime=0.0,
+      nextRequestDelay=0.0,
       lock=Lock()
     ),
     'net-usage-by-ip': CachedRequest(
       cache={},
-      nextRequest=0.0,
-      delay=0.0,
+      nextRequestTime=0.0,
+      nextRequestDelay=0.0,
       lock=Lock()
     ),
 }
