@@ -2,25 +2,37 @@ import json
 from random import randint
 from threading import Thread, Lock
 from time import time
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Union
+from types import SimpleNamespace
 
 from flask import Flask, Response, render_template
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 
-CACHE = {
-    'active-clients': {
-        'cache': [],
-        'nextRequest': 0,
-        'delay': 0.0,
-        'lock': Lock()
-    },
-    'net-usage-by-ip': {
-        'cache': {},
-        'nextRequest': 0,
-        'delay': 0.0,
-        'lock': Lock()
-    }
+CachedRequestActiveClientsCache = List[Tuple[str, Optional[str]]]
+CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
+
+
+class CachedRequest(SimpleNamespace):
+    cache: Union[CachedRequestActiveClientsCache, CachedRequestNetUsageByIPCache]
+    nextRequestTime: float
+    nextRequestDelay: float
+    lock: Lock
+
+
+CACHE: Dict[str, CachedRequest] = {
+    'active-clients': CachedRequest(
+      cache=[],
+      nextRequest=0.0,
+      delay=0.0,
+      lock=Lock()
+    ),
+    'net-usage-by-ip': CachedRequest(
+      cache={},
+      nextRequest=0.0,
+      delay=0.0,
+      lock=Lock()
+    ),
 }
 
 app = Flask(__name__, static_folder='static', template_folder='html')
@@ -40,7 +52,7 @@ def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
     return conn.get_api(), conn
 
 
-def get_active_clients() -> List[Tuple[str, Optional[str]]]:
+def get_active_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
     conn.disconnect()
@@ -52,7 +64,7 @@ def get_active_clients() -> List[Tuple[str, Optional[str]]]:
     return r
 
 
-def get_net_usage_by_ip() -> Dict[str, Tuple[int, int]]:
+def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
     if api.get_resource('/tool/sniffer').get()[0]['running'] != 'true':
@@ -91,47 +103,46 @@ def web_root() -> Response:
 @app.route('/api/active-clients')
 def api_active_clients() -> Response:
     entry = CACHE['active-clients']
-    time_to_next_request = entry['nextRequest'] - time()
-    lock: Lock = entry['lock']
+    time_to_next_request = entry.nextRequestTime - time()
+    lock: Lock = entry.lock
     if time_to_next_request < 0 and lock.acquire(blocking=False):
-        if entry['nextRequest'] and time_to_next_request < -5 * 60:
-            entry['delay'] = 2
+        if entry.nextRequestTime and time_to_next_request < -5 * 60:
+            entry.nextRequestDelay = 2
         else:
-            entry['delay'] = min(entry['delay'] + 0.2 + randint(0, 10) / 10, 30)
-        entry['nextRequest'] = int(time()) + entry['delay']
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 30)
+        entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
             try:
-                entry['cache'] = get_active_clients()
+                entry.cache = get_active_clients()
             finally:
                 lock.release()
 
         Thread(target=job).start()
 
-    return rt(entry['cache'])
+    return rt(entry.cache)
 
 
 @app.route('/api/net-usage-by-ip')
 def api_net_usage_by_ip() -> Response:
     entry = CACHE['net-usage-by-ip']
-    time_to_next_request = entry['nextRequest'] - time()
-    lock: Lock = entry['lock']
+    time_to_next_request = entry.nextRequestTime - time()
+    lock: Lock = entry.lock
     if time_to_next_request < 0 and lock.acquire(blocking=False):
-        if entry['nextRequest'] and time_to_next_request < -5 * 60:
-            entry['delay'] = 2
+        if entry.nextRequestTime and time_to_next_request < -5 * 60:
+            entry.nextRequestDelay = 2
         else:
-            entry['delay'] = min(entry['delay'] + 0.2 + randint(0, 10) / 10, 30)
-        entry['nextRequest'] = int(time()) + entry['delay']
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 30)
+        entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
             try:
-                # noinspection PyTypeChecker
-                entry['cache'] = get_net_usage_by_ip()
+                entry.cache = get_net_usage_by_ip()
             finally:
                 lock.release()
 
         Thread(target=job).start()
-    return rt(entry['cache'])
+    return rt(entry.cache)
 
 
 def main():
