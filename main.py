@@ -61,6 +61,13 @@ def get_updates_available() -> bool:
     return 'available' in res[-1]['status'].lower()
 
 
+def get_log() -> List[Dict[str, str]]:
+    api, conn = get_api()
+    res = api.get_resource('/log').get()
+    conn.disconnect()
+    return res
+
+
 def get_active_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
@@ -154,14 +161,40 @@ def api_net_usage_by_ip() -> Response:
     return rt(entry.cache)
 
 
-def thread_check_updates():
+def send_notification(msg: str) -> bool:
+    return requests.get('https://api.ahlava.cz/msg/' + msg).status_code == 200
+
+
+def thread_check_updates() -> None:
     while True:
         if get_updates_available():
-            requests.get('https://api.ahlava.cz/msg/Router updates available')
+            send_notification('Router updates available')
         sleep((24 + randint(0, 24)) * 3600)
 
 
+def thread_notif_logged_errors() -> None:
+    last_id = -1
+    first_load = True
+    while True:
+        max_id = -1
+        for rec in get_log():
+            rec_id = int(rec.get('id', '*-1')[1:], 16)
+            if rec_id <= last_id:
+                continue
+            max_id = max(rec_id, max_id)
+            topics: List[str] = rec.get('topics', '').split(',')
+            if 'error' not in topics:
+                continue
+            if not first_load:
+                message = f"Router error {rec_id} @ {rec.get('time')}: {rec.get('message')}"
+                send_notification(message)
+        last_id = max_id
+        first_load = False
+        sleep(600 + randint(0, 600))
+
+
 def main():
+    Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     app.run(port=8341)
 
