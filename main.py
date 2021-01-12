@@ -68,6 +68,13 @@ def get_log() -> List[Dict[str, str]]:
     return res
 
 
+def get_sniffer_running() -> bool:
+    api, conn = get_api()
+    r = api.get_resource('/tool/sniffer').get()[0]['running'] == 'true'
+    conn.disconnect()
+    return r
+
+
 def get_active_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
@@ -83,7 +90,7 @@ def get_active_clients() -> CachedRequestActiveClientsCache:
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
-    if api.get_resource('/tool/sniffer').get()[0]['running'] != 'true':
+    if not get_sniffer_running():
         api.get_resource('/tool/sniffer').call('start')
     packets = api.get_resource('/tool/sniffer/host').get()
     conn.disconnect()
@@ -165,6 +172,16 @@ def send_notification(msg: str) -> bool:
     return requests.get('https://api.ahlava.cz/msg/' + msg).status_code == 200
 
 
+def thread_stop_sniffer() -> None:
+    while True:
+        if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
+                CACHE['net-usage-by-ip'].nextRequestTime - time() < -600 and get_sniffer_running():
+            api, conn = get_api()
+            api.get_resource('/tool/sniffer').call('start')
+            conn.disconnect()
+        sleep((5 + randint(0, 10)) * 60)
+
+
 def thread_check_updates() -> None:
     while True:
         if get_updates_available():
@@ -196,6 +213,7 @@ def thread_notif_logged_errors() -> None:
 def main():
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
+    Thread(target=thread_stop_sniffer, daemon=True).start()
     app.run(port=8341)
 
 
