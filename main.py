@@ -202,7 +202,7 @@ def thread_notif_logged_errors() -> None:
             topics: List[str] = rec.get('topics', '').split(',')
             if 'error' not in topics:
                 continue
-            if 'DoH server connection error: Idle timeout' in rec.get('message', ''):
+            if 'DoH server connection error: ' in rec.get('message', ''):
                 continue
             if not first_load:
                 message = f"Router error {rec_id} @ {rec.get('time')}: {rec.get('message')}"
