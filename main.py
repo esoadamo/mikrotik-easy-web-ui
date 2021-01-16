@@ -132,7 +132,7 @@ def api_active_clients() -> Response:
         if entry.nextRequestTime and time_to_next_request < -5 * 60:
             entry.nextRequestDelay = 2
         else:
-            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 30)
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 10)
         entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
