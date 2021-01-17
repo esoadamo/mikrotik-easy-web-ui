@@ -177,7 +177,7 @@ def thread_stop_sniffer() -> None:
         if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
                 CACHE['net-usage-by-ip'].nextRequestTime - time() < -600 and get_sniffer_running():
             api, conn = get_api()
-            api.get_resource('/tool/sniffer').call('start')
+            api.get_resource('/tool/sniffer').call('stop')
             conn.disconnect()
         sleep((5 + randint(0, 10)) * 60)
 
