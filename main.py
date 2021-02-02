@@ -3,11 +3,12 @@ import traceback
 from random import randint
 from threading import Thread, Lock
 from time import time
-from typing import List, Tuple, Optional, Dict, Union, Callable, Any
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set
 from types import SimpleNamespace
 from time import sleep
 from subprocess import call, PIPE
 from uuid import uuid4 as uuid
+from hashlib import md5
 
 import requests
 from flask import Flask, Response, render_template
@@ -122,7 +123,7 @@ def get_active_clients() -> CachedRequestActiveClientsCache:
     return r
 
 
-
+@retry_on_routeros_error
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
@@ -229,15 +230,16 @@ def thread_check_updates() -> None:
 
 @retry_on_routeros_error
 def thread_notif_logged_errors() -> None:
-    last_id = -1
+    message_hashes: Set[bytes] = set()
     first_load = True
     while True:
-        max_id = -1
+        message_hashes_curr: Set[bytes] = set()
         for rec in get_log():
+            rec_hash: bytes = md5(json.dumps(rec).encode('utf8')).digest()
             rec_id = int(rec.get('id', '*-1')[1:], 16)
-            if rec_id <= last_id:
+            if rec_hash in message_hashes:
                 continue
-            max_id = max(rec_id, max_id)
+            message_hashes_curr.add(rec_hash)
             topics: List[str] = rec.get('topics', '').split(',')
             if 'error' not in topics:
                 continue
@@ -246,7 +248,7 @@ def thread_notif_logged_errors() -> None:
             if not first_load:
                 message = f"Router error {rec_id} @ {rec.get('time')}: {rec.get('message')}"
                 send_notification(message)
-        last_id = max_id
+        message_hashes = message_hashes_curr
         first_load = False
         sleep(600 + randint(0, 600))
 
