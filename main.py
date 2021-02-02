@@ -1,15 +1,20 @@
 import json
+import traceback
 from random import randint
 from threading import Thread, Lock
 from time import time
-from typing import List, Tuple, Optional, Dict, Union
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any
 from types import SimpleNamespace
 from time import sleep
+from subprocess import call, PIPE
+from uuid import uuid4 as uuid
 
 import requests
 from flask import Flask, Response, render_template
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
+from routeros_api.exceptions import RouterOsApiError, RouterOsApiConnectionError, RouterOsApiCommunicationError
+from routeros_api.exceptions import RouterOsApiConnectionClosedError, RouterOsApiFatalCommunicationError
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str]]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
@@ -54,6 +59,33 @@ def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
     return conn.get_api(), conn
 
 
+def retry_on_routeros_error(f: Callable) -> Callable:
+    def i() -> Any:
+        while True:
+            try:
+                return f()
+            except (RouterOsApiError, RouterOsApiConnectionError, RouterOsApiConnectionError,
+                    RouterOsApiFatalCommunicationError, RouterOsApiCommunicationError,
+                    RouterOsApiConnectionClosedError):
+                traceback.print_exc()
+                print('[RouterOS ERROR] Retrying')
+                sleep(60)
+
+    return i
+
+
+def ping(host: str) -> bool:
+    try:
+        return call(['ping', '-c', '3', host], timeout=300, stdout=PIPE, stdin=PIPE, stderr=PIPE) == 0
+    except TimeoutError:
+        return False
+
+
+def is_dns_healthy() -> bool:
+    return ping(f"{uuid().hex}_rand.ahlava.cz")
+
+
+@retry_on_routeros_error
 def get_updates_available() -> bool:
     api, conn = get_api()
     res = api.get_resource('/system/package/update').call('check-for-updates')
@@ -61,6 +93,7 @@ def get_updates_available() -> bool:
     return 'available' in res[-1]['status'].lower()
 
 
+@retry_on_routeros_error
 def get_log() -> List[Dict[str, str]]:
     api, conn = get_api()
     res = api.get_resource('/log').get()
@@ -68,6 +101,7 @@ def get_log() -> List[Dict[str, str]]:
     return res
 
 
+@retry_on_routeros_error
 def get_sniffer_running() -> bool:
     api, conn = get_api()
     r = api.get_resource('/tool/sniffer').get()[0]['running'] == 'true'
@@ -75,6 +109,7 @@ def get_sniffer_running() -> bool:
     return r
 
 
+@retry_on_routeros_error
 def get_active_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
@@ -85,6 +120,7 @@ def get_active_clients() -> CachedRequestActiveClientsCache:
             continue
         r.append((client.get('address'), client.get('comment')))
     return r
+
 
 
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
@@ -172,6 +208,7 @@ def send_notification(msg: str) -> bool:
     return requests.get('https://api.ahlava.cz/msg/' + msg).status_code == 200
 
 
+@retry_on_routeros_error
 def thread_stop_sniffer() -> None:
     while True:
         if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
@@ -182,6 +219,7 @@ def thread_stop_sniffer() -> None:
         sleep((5 + randint(0, 10)) * 60)
 
 
+@retry_on_routeros_error
 def thread_check_updates() -> None:
     while True:
         if get_updates_available():
@@ -189,6 +227,7 @@ def thread_check_updates() -> None:
         sleep((24 + randint(0, 24)) * 3600)
 
 
+@retry_on_routeros_error
 def thread_notif_logged_errors() -> None:
     last_id = -1
     first_load = True
@@ -212,10 +251,30 @@ def thread_notif_logged_errors() -> None:
         sleep(600 + randint(0, 600))
 
 
+@retry_on_routeros_error
+def thread_test_dns() -> None:
+    while True:
+        if not is_dns_healthy():
+            print('[DNS HEALTH] Restoring DNS')
+            api, conn = get_api()
+            api.get_resource('/ip/dns/cache').call('flush')
+            api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
+            sleep(5)
+            if not is_dns_healthy():
+                sleep(30)
+                continue
+            api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
+                                                               'verify-doh-cert': 'yes'})
+            conn.disconnect()
+
+        sleep((4 * 60 + + randint(10, 180)) if is_dns_healthy() else 30)
+
+
 def main():
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
+    Thread(target=thread_test_dns, daemon=True).start()
     app.run(port=8341)
 
 
