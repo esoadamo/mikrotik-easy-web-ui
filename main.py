@@ -278,6 +278,7 @@ def thread_test_dns() -> None:
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
             sleep(5)
             if not is_dns_healthy():
+                conn.disconnect()
                 sleep(30)
                 continue
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
