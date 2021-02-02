@@ -238,8 +238,11 @@ def thread_notif_logged_errors() -> None:
     while True:
         message_hashes_curr: Set[bytes] = set()
         for rec in get_log():
-            rec_json: str = json.dumps(rec)
-            rec_hash: bytes = md5(rec_json.encode('utf8')).digest()
+            rec_time: str = rec.get('time', '')
+            rec_message: str = rec.get('message', '')
+
+            rec_hash: bytes = md5((rec_message + (rec_time if ' ' not in rec_time else rec_time.split(' ', 1)[1]))
+                                  .encode('utf8')).digest()
             rec_id = int(rec.get('id', '*-1')[1:], 16)
             if rec_hash in message_hashes:
                 continue
@@ -249,14 +252,16 @@ def thread_notif_logged_errors() -> None:
             if not first_load and FILE_ROUTER_LOG.exists():
                 with LOCK_ROUTER_LOG:
                     with FILE_ROUTER_LOG.open('a') as f:
-                        f.write(rec_json + '\n')
+                        rec_log_data = {'timestamp': int(time())}
+                        rec_log_data.update(rec)
+                        f.write(json.dumps(rec_log_data) + '\n')
 
             if 'error' not in topics:
                 continue
-            if 'DoH server connection error: ' in rec.get('message', ''):
+            if 'DoH server connection error: ' in rec_message:
                 continue
             if not first_load:
-                message = f"Router error {rec_id} @ {rec.get('time')}: {rec.get('message')}"
+                message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
                 send_notification(message)
         message_hashes = message_hashes_curr
         first_load = False
