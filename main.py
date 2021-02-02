@@ -16,6 +16,7 @@ from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 from routeros_api.exceptions import RouterOsApiError, RouterOsApiConnectionError, RouterOsApiCommunicationError
 from routeros_api.exceptions import RouterOsApiConnectionClosedError, RouterOsApiFatalCommunicationError
+from pathlib import Path
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str]]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
@@ -44,6 +45,8 @@ CACHE: Dict[str, CachedRequest] = {
 }
 
 app = Flask(__name__, static_folder='static', template_folder='html')
+FILE_ROUTER_LOG = Path('/var/log/router.log')
+LOCK_ROUTER_LOG = Lock()
 
 
 def rt(data: any) -> Response:
@@ -235,12 +238,19 @@ def thread_notif_logged_errors() -> None:
     while True:
         message_hashes_curr: Set[bytes] = set()
         for rec in get_log():
-            rec_hash: bytes = md5(json.dumps(rec).encode('utf8')).digest()
+            rec_json: str = json.dumps(rec)
+            rec_hash: bytes = md5(rec_json.encode('utf8')).digest()
             rec_id = int(rec.get('id', '*-1')[1:], 16)
             if rec_hash in message_hashes:
                 continue
             message_hashes_curr.add(rec_hash)
             topics: List[str] = rec.get('topics', '').split(',')
+
+            if not first_load and FILE_ROUTER_LOG.exists():
+                with LOCK_ROUTER_LOG:
+                    with FILE_ROUTER_LOG.open('a') as f:
+                        f.write(rec_json + '\n')
+
             if 'error' not in topics:
                 continue
             if 'DoH server connection error: ' in rec.get('message', ''):
