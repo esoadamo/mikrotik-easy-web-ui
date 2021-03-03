@@ -262,25 +262,27 @@ def thread_notif_logged_errors() -> None:
             rec_hash: str = md5(rec_hash_input.encode('utf8')).hexdigest()
             rec_id = int(rec.get('id', '*-1')[1:], 16)
             message_hashes_curr.add(rec_hash)
-            if rec_hash in message_hashes:
+            if rec_hash in message_hashes or first_load:
                 continue
             topics: List[str] = rec.get('topics', '').split(',')
 
-            if not first_load and FILE_ROUTER_LOG.exists():
-                with LOCK_ROUTER_LOG:
+            with LOCK_ROUTER_LOG:
+                try:
                     with FILE_ROUTER_LOG.open('a') as f:
                         rec_log_data = {'timestamp': int(time())}
                         rec_log_data.update(rec)
                         f.write(json.dumps(rec_log_data) + '\n')
+                except PermissionError:
+                    log('[FATAL] [LOG] cannot write log to a file')
 
             if 'error' not in topics:
                 continue
             if 'DoH server connection error: ' in rec_message:
                 continue
-            if not first_load:
-                message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
-                log("[LOG]", message)
-                send_notification(message)
+
+            message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
+            log("[LOG]", message)
+            send_notification(message)
         message_hashes = message_hashes_curr
         first_load = False
         sleep(600 + randint(0, 600))
@@ -322,13 +324,13 @@ def thread_check_cpu() -> None:
 
 @retry_on_error
 def thread_write_log() -> None:
-    try:
-        while True:
-            line = SELF_LOG_QUEUE.get()
+    while True:
+        line = SELF_LOG_QUEUE.get()
+        try:
             with FILE_SELF_LOG.open('a') as f:
                 f.write(line + '\n')
-    except PermissionError:
-        print(f'[LOG] Fatal: Cannot access log file "{FILE_SELF_LOG}"')
+        except PermissionError:
+            print(f'[LOG] Fatal: Cannot access log file "{FILE_SELF_LOG}"')
 
 
 def main():
