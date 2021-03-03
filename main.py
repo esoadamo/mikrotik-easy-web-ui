@@ -250,20 +250,20 @@ def thread_check_updates() -> None:
 
 @retry_on_error
 def thread_notif_logged_errors() -> None:
-    message_hashes: Set[bytes] = set()
+    message_hashes: Set[str] = set()
     first_load = True
     while True:
-        message_hashes_curr: Set[bytes] = set()
+        message_hashes_curr: Set[str] = set()
         for rec in get_log():
             rec_time: str = rec.get('time', '')
             rec_message: str = rec.get('message', '')
 
-            rec_hash: bytes = md5((rec_message + (rec_time if ' ' not in rec_time else rec_time.split(' ', 1)[1]))
-                                  .encode('utf8')).digest()
+            rec_hash_input = (rec_message + (rec_time if ' ' not in rec_time else rec_time.split(' ', 1)[1]))
+            rec_hash: str = md5(rec_hash_input.encode('utf8')).hexdigest()
             rec_id = int(rec.get('id', '*-1')[1:], 16)
+            message_hashes_curr.add(rec_hash)
             if rec_hash in message_hashes:
                 continue
-            message_hashes_curr.add(rec_hash)
             topics: List[str] = rec.get('topics', '').split(',')
 
             if not first_load and FILE_ROUTER_LOG.exists():
@@ -279,7 +279,7 @@ def thread_notif_logged_errors() -> None:
                 continue
             if not first_load:
                 message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
-                log("[LOG]", message, rec_hash.hex())
+                log("[LOG]", message)
                 send_notification(message)
         message_hashes = message_hashes_curr
         first_load = False
@@ -312,7 +312,7 @@ def thread_check_cpu() -> None:
         html = requests.get(f'http://{ROUTER_ADDRESS}/graphs/cpu/', timeout=60).text
         for r in re.finditer(r'Max:\s+[0-9]+%;\s+Average:\s+[0-9]+%;\s+Current:\s+([0-9]+)%', html, re.I):
             current_usage = int(r.group(1))
-            if current_usage > 75:
+            if current_usage > 65:
                 msg = f"High router CPU usage ({current_usage}%)"
                 log("[CPU]", msg)
                 send_notification(msg)
