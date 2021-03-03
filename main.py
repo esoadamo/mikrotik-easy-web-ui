@@ -1,5 +1,6 @@
 import json
 import traceback
+import re
 from datetime import datetime
 from queue import Queue
 from random import randint
@@ -47,6 +48,8 @@ CACHE: Dict[str, CachedRequest] = {
 }
 
 app = Flask(__name__, static_folder='static', template_folder='html')
+
+ROUTER_ADDRESS = '10.1.1.1'
 FILE_ROUTER_LOG = Path('/var/log/router.log')
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path('/var/log/router_api.log')
@@ -58,7 +61,7 @@ def rt(data: any) -> Response:
 
 
 def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
-    conn = RouterOsApiPool('10.1.1.1',
+    conn = RouterOsApiPool(ROUTER_ADDRESS,
                            username='api',
                            password=r"""12df4c479a4189367aba29e1eb74983479b15440ae321115626806fbd9858915""",
                            use_ssl=True,
@@ -220,7 +223,7 @@ def api_net_usage_by_ip() -> Response:
 
 
 def send_notification(msg: str) -> bool:
-    return requests.get('https://api.ahlava.cz/msg/' + msg).status_code == 200
+    return requests.get('https://api.ahlava.cz/msg/' + msg, timeout=60).status_code == 200
 
 
 @retry_on_routeros_error
@@ -300,11 +303,27 @@ def thread_test_dns() -> None:
         sleep((60 + randint(10, 120)) if is_dns_healthy() else 30)
 
 
-def thread_write_log() -> None:
+def thread_check_cpu() -> None:
     while True:
-        line = SELF_LOG_QUEUE.get()
-        with FILE_SELF_LOG.open('a') as f:
-            f.write(line + '\n')
+        html = requests.get(f'http://{ROUTER_ADDRESS}/graphs/cpu/', timeout=60).text
+        for r in re.finditer(r'Max:\s+[0-9]+%;\s+Average:\s+[0-9]+%;\s+Current:\s+([0-9]+)%', html, re.I):
+            current_usage = int(r.group(1))
+            if current_usage > 75:
+                msg = f"High router CPU usage ({current_usage}%)"
+                log("[CPU]", msg)
+                send_notification(msg)
+            break
+        sleep(5 * 60 + randint(30, 50))
+
+
+def thread_write_log() -> None:
+    try:
+        while True:
+            line = SELF_LOG_QUEUE.get()
+            with FILE_SELF_LOG.open('a') as f:
+                f.write(line + '\n')
+    except PermissionError:
+        print(f'[LOG] Fatal: Cannot access log file "{FILE_SELF_LOG}"')
 
 
 def main():
@@ -313,6 +332,7 @@ def main():
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
     Thread(target=thread_test_dns, daemon=True).start()
+    Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
     app.run(port=8341)
 
