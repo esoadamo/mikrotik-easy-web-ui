@@ -1,25 +1,23 @@
 import json
-import traceback
 import re
+import traceback
 from datetime import datetime
+from hashlib import md5
+from pathlib import Path
 from queue import Queue
 from random import randint
-from threading import Thread, Lock
-from time import time
-from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set
-from types import SimpleNamespace
-from time import sleep
 from subprocess import call, PIPE
+from threading import Thread, Lock
+from time import sleep
+from time import time
+from types import SimpleNamespace
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set
 from uuid import uuid4 as uuid
-from hashlib import md5
 
 import requests
 from flask import Flask, Response, render_template
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
-from routeros_api.exceptions import RouterOsApiError, RouterOsApiConnectionError, RouterOsApiCommunicationError
-from routeros_api.exceptions import RouterOsApiConnectionClosedError, RouterOsApiFatalCommunicationError
-from pathlib import Path
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str]]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
@@ -70,16 +68,16 @@ def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
     return conn.get_api(), conn
 
 
-def retry_on_routeros_error(f: Callable) -> Callable:
+def retry_on_error(f: Callable) -> Callable:
     def i() -> Any:
         while True:
+            # noinspection PyBroadException
             try:
                 return f()
-            except (RouterOsApiError, RouterOsApiConnectionError, RouterOsApiConnectionError,
-                    RouterOsApiFatalCommunicationError, RouterOsApiCommunicationError,
-                    RouterOsApiConnectionClosedError):
-                traceback.print_exc()
-                log('[RouterOS ERROR] Retrying')
+            except Exception:
+                exc = traceback.format_exc()
+                log('[ERROR] Retrying')
+                log('[TRACEBACK]', exc)
                 sleep(60)
 
     return i
@@ -98,12 +96,17 @@ def is_dns_healthy() -> bool:
 
 def log(*args) -> None:
     date = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    line = f"{date}: {' '.join([str(x) for x in args])}"
+    line = ' '.join([str(x) for x in args])
+    line_offset = " " * (len(date) + 1)
+
+    line = line.replace('\n', '\n' + line_offset)
+
+    line = f"{date}: {line}"
     print(line)
     SELF_LOG_QUEUE.put(line)
 
 
-@retry_on_routeros_error
+@retry_on_error
 def get_updates_available() -> bool:
     api, conn = get_api()
     res = api.get_resource('/system/package/update').call('check-for-updates')
@@ -111,7 +114,7 @@ def get_updates_available() -> bool:
     return 'available' in res[-1]['status'].lower()
 
 
-@retry_on_routeros_error
+@retry_on_error
 def get_log() -> List[Dict[str, str]]:
     api, conn = get_api()
     res = api.get_resource('/log').get()
@@ -119,7 +122,7 @@ def get_log() -> List[Dict[str, str]]:
     return res
 
 
-@retry_on_routeros_error
+@retry_on_error
 def get_sniffer_running() -> bool:
     api, conn = get_api()
     r = api.get_resource('/tool/sniffer').get()[0]['running'] == 'true'
@@ -127,7 +130,7 @@ def get_sniffer_running() -> bool:
     return r
 
 
-@retry_on_routeros_error
+@retry_on_error
 def get_active_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
@@ -140,7 +143,7 @@ def get_active_clients() -> CachedRequestActiveClientsCache:
     return r
 
 
-@retry_on_routeros_error
+@retry_on_error
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
@@ -226,7 +229,7 @@ def send_notification(msg: str) -> bool:
     return requests.get('https://api.ahlava.cz/msg/' + msg, timeout=60).status_code == 200
 
 
-@retry_on_routeros_error
+@retry_on_error
 def thread_stop_sniffer() -> None:
     while True:
         if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
@@ -237,7 +240,7 @@ def thread_stop_sniffer() -> None:
         sleep((5 + randint(0, 10)) * 60)
 
 
-@retry_on_routeros_error
+@retry_on_error
 def thread_check_updates() -> None:
     while True:
         if get_updates_available():
@@ -245,7 +248,7 @@ def thread_check_updates() -> None:
         sleep((24 + randint(0, 24)) * 3600)
 
 
-@retry_on_routeros_error
+@retry_on_error
 def thread_notif_logged_errors() -> None:
     message_hashes: Set[bytes] = set()
     first_load = True
@@ -283,7 +286,7 @@ def thread_notif_logged_errors() -> None:
         sleep(600 + randint(0, 600))
 
 
-@retry_on_routeros_error
+@retry_on_error
 def thread_test_dns() -> None:
     while True:
         if not is_dns_healthy():
@@ -303,6 +306,7 @@ def thread_test_dns() -> None:
         sleep((60 + randint(10, 120)) if is_dns_healthy() else 30)
 
 
+@retry_on_error
 def thread_check_cpu() -> None:
     while True:
         html = requests.get(f'http://{ROUTER_ADDRESS}/graphs/cpu/', timeout=60).text
@@ -316,6 +320,7 @@ def thread_check_cpu() -> None:
         sleep(5 * 60 + randint(30, 50))
 
 
+@retry_on_error
 def thread_write_log() -> None:
     try:
         while True:
