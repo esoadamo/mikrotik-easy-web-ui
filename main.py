@@ -91,7 +91,7 @@ def ping(host: str) -> bool:
 
 
 def is_dns_healthy() -> bool:
-    return ping(f"{uuid().hex}.local.devmonthor.eu")
+    return (not ping("1.1.1.1") and not ping("8.8.8.8")) or ping(f"{uuid().hex}.local.devmonthor.eu")
 
 
 def log(*args) -> None:
