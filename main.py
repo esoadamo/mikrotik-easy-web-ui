@@ -1,5 +1,7 @@
 import json
 import traceback
+from datetime import datetime
+from queue import Queue
 from random import randint
 from threading import Thread, Lock
 from time import time
@@ -47,6 +49,8 @@ CACHE: Dict[str, CachedRequest] = {
 app = Flask(__name__, static_folder='static', template_folder='html')
 FILE_ROUTER_LOG = Path('/var/log/router.log')
 LOCK_ROUTER_LOG = Lock()
+FILE_SELF_LOG = Path('/var/log/router_api.log')
+SELF_LOG_QUEUE = Queue(maxsize=2048)
 
 
 def rt(data: any) -> Response:
@@ -72,7 +76,7 @@ def retry_on_routeros_error(f: Callable) -> Callable:
                     RouterOsApiFatalCommunicationError, RouterOsApiCommunicationError,
                     RouterOsApiConnectionClosedError):
                 traceback.print_exc()
-                print('[RouterOS ERROR] Retrying')
+                log('[RouterOS ERROR] Retrying')
                 sleep(60)
 
     return i
@@ -86,7 +90,14 @@ def ping(host: str) -> bool:
 
 
 def is_dns_healthy() -> bool:
-    return ping(f"{uuid().hex}_rand.ahlava.cz")
+    return ping(f"{uuid().hex}.local.devmonthor.eu")
+
+
+def log(*args) -> None:
+    date = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+    line = f"{date}: {' '.join([str(x) for x in args])}"
+    print(line)
+    SELF_LOG_QUEUE.put(line)
 
 
 @retry_on_routeros_error
@@ -262,6 +273,7 @@ def thread_notif_logged_errors() -> None:
                 continue
             if not first_load:
                 message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
+                log("[LOG]", message, rec_hash.hex())
                 send_notification(message)
         message_hashes = message_hashes_curr
         first_load = False
@@ -272,7 +284,7 @@ def thread_notif_logged_errors() -> None:
 def thread_test_dns() -> None:
     while True:
         if not is_dns_healthy():
-            print('[DNS HEALTH] Restoring DNS')
+            log('[DNS HEALTH] Restoring DNS')
             api, conn = get_api()
             api.get_resource('/ip/dns/cache').call('flush')
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
@@ -285,14 +297,23 @@ def thread_test_dns() -> None:
                                                                'verify-doh-cert': 'yes'})
             conn.disconnect()
 
-        sleep((4 * 60 + + randint(10, 180)) if is_dns_healthy() else 30)
+        sleep((60 + randint(10, 120)) if is_dns_healthy() else 30)
+
+
+def thread_write_log() -> None:
+    while True:
+        line = SELF_LOG_QUEUE.get()
+        with FILE_SELF_LOG.open('a') as f:
+            f.write(line + '\n')
 
 
 def main():
+    log("[MAIN] starting up")
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
     Thread(target=thread_test_dns, daemon=True).start()
+    Thread(target=thread_write_log, daemon=True).start()
     app.run(port=8341)
 
 
