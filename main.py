@@ -294,7 +294,6 @@ def thread_test_dns() -> None:
         if not is_dns_healthy():
             log('[DNS HEALTH] Restoring DNS')
             api, conn = get_api()
-            api.get_resource('/ip/dns/cache').call('flush')
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
             sleep(5)
             if not is_dns_healthy():
