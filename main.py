@@ -32,16 +32,16 @@ class CachedRequest(SimpleNamespace):
 
 CACHE: Dict[str, CachedRequest] = {
     'active-clients': CachedRequest(
-      cache=[],
-      nextRequestTime=0.0,
-      nextRequestDelay=0.0,
-      lock=Lock()
+        cache=[],
+        nextRequestTime=0.0,
+        nextRequestDelay=0.0,
+        lock=Lock()
     ),
     'net-usage-by-ip': CachedRequest(
-      cache={},
-      nextRequestTime=0.0,
-      nextRequestDelay=0.0,
-      lock=Lock()
+        cache={},
+        nextRequestTime=0.0,
+        nextRequestDelay=0.0,
+        lock=Lock()
     ),
 }
 
@@ -92,6 +92,16 @@ def ping(host: str) -> bool:
 
 def is_dns_healthy() -> bool:
     return (not ping("1.1.1.1") and not ping("8.8.8.8")) or ping(f"{uuid().hex}.local.devmonthor.eu")
+
+
+def set_doh_enabled(enabled: bool) -> None:
+    api, conn = get_api()
+    if enabled:
+        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
+                                                           'verify-doh-cert': 'yes'})
+    else:
+        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
+    conn.disconnect()
 
 
 def log(*args) -> None:
@@ -160,7 +170,7 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
         if speed_up + speed_down == 0:
             continue
         ip_speed[ip_from] = (speed_down, speed_up)
-        
+
     router_ip = '10.1.1.1'
     server_ip = '10.1.1.10'
     if router_ip in ip_speed and server_ip in ip_speed:
@@ -293,19 +303,14 @@ def thread_test_dns() -> None:
     while True:
         if not is_dns_healthy():
             log('[DNS HEALTH] Restoring DNS')
-            api, conn = get_api()
-            api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
-            conn.disconnect()
+            set_doh_enabled(False)
 
             sleep(5 * 60)
             if not is_dns_healthy():
                 sleep(30)
                 continue
 
-            api, conn = get_api()
-            api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
-                                                               'verify-doh-cert': 'yes'})
-            conn.disconnect()
+            set_doh_enabled(True)
 
         sleep(30)
 
