@@ -295,16 +295,19 @@ def thread_test_dns() -> None:
             log('[DNS HEALTH] Restoring DNS')
             api, conn = get_api()
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
-            sleep(5)
+            conn.disconnect()
+
+            sleep(5 * 60)
             if not is_dns_healthy():
-                conn.disconnect()
                 sleep(30)
                 continue
+
+            api, conn = get_api()
             api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
                                                                'verify-doh-cert': 'yes'})
             conn.disconnect()
 
-        sleep((60 + randint(10, 120)) if is_dns_healthy() else 30)
+        sleep(30)
 
 
 @retry_on_error
