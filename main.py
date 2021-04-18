@@ -15,7 +15,7 @@ from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set
 from uuid import uuid4 as uuid
 
 import requests
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, redirect, url_for
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 
@@ -186,11 +186,16 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
 
 
 @app.route('/')
+def web_index() -> Response:
+    return redirect(url_for('web_root'))
+
+
+@app.route('/net/')
 def web_root() -> Response:
     return render_template('index.html')
 
 
-@app.route('/api/active-clients')
+@app.route('/net/api/active-clients')
 def api_active_clients() -> Response:
     entry = CACHE['active-clients']
     time_to_next_request = entry.nextRequestTime - time()
@@ -213,7 +218,7 @@ def api_active_clients() -> Response:
     return rt(entry.cache)
 
 
-@app.route('/api/net-usage-by-ip')
+@app.route('/net/api/net-usage-by-ip')
 def api_net_usage_by_ip() -> Response:
     entry = CACHE['net-usage-by-ip']
     time_to_next_request = entry.nextRequestTime - time()
