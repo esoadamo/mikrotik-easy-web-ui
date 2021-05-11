@@ -63,7 +63,7 @@
                 </table>
             </div>
             <!--suppress HtmlUnknownTarget -->
-            <form method="post" action="/net/api/new-limit">
+            <form method="post" action="api/new-limit">
             <div class="table-responsive">
                 <table class="table">
                     <tbody>
@@ -82,6 +82,7 @@
     </div>
 </div>
 
+<!--suppress HtmlUnknownTarget -->
 <script>
     window.onload = () => {
         const clientsCache = {'10.1.1.1': 'Router'};
@@ -94,6 +95,19 @@
             const option = elNewLimitTarget.selectedOptions[0];
             option.selected = true;
             option.classList.add('selected');
+        }
+
+        const elActiveLimits = document.getElementById('active-limits');
+        const getActiveLimits = async () => {
+            const data = await (await fetch('api/limits')).json();
+            elActiveLimits.innerHTML = '';
+            for (let limit of data) {
+                const [ name, target, download, upload, until ] = limit;
+                const untilStr = until !== null ? new Date(until * 1000).toISOString() : 'Forever';
+                elActiveLimits.innerHTML += '<tr>';
+                elActiveLimits.innerHTML += `<td>${clientsCache[target] || target}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
+                elActiveLimits.innerHTML += '</tr>';
+            }
         }
 
         const tBodyActiveClients = document.getElementById('active-clients');
@@ -133,7 +147,7 @@
             }
         }
 
-        getClients();
+        getClients().then(() => getActiveLimits());
         setInterval(() => getClients(), 2200);
 
         const tBodyNetUsageByIp = document.getElementById('net-usage-by-ip')

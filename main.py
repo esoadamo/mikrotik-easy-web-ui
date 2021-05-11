@@ -21,6 +21,7 @@ from routeros_api.api import RouterOsApi
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
+RequestLimits = List[Tuple[str, str, float, float, Optional[int]]]
 
 
 class CachedRequest(SimpleNamespace):
@@ -139,6 +140,21 @@ def limit_add(name: str, target: str, upload: float, download: float) -> None:
     })
     print("%.2fM/%.2fM" % (upload * 8, download * 8))
     conn.disconnect()
+
+
+def limits_fetch() -> RequestLimits:
+    api, conn = get_api()
+    r: RequestLimits = []
+    for limit in api.get_resource('/queue/simple').get():
+        name: str = limit.get('name')
+        if not name.startswith('_'):
+            continue
+        _, target, timeout = name.split('_')
+        upload, download = limit.get('max-limit').split('/')
+        timeout = int(timeout) if timeout != 'EVA' else None
+        r.append((name, str(target), int(download) / 8000000, int(upload) / 8000000, timeout))
+    conn.disconnect()
+    return r
 
 
 def log(*args) -> None:
@@ -299,6 +315,19 @@ def api_new_limit() -> Response:
     limit_add(f"_{target}_{ttl}", target, upload, download)
 
     return redirect(url_for('web_root'))
+
+
+@app.route('/net/api/limit-remove', methods=['POST'])
+def api_limit_remove() -> Response:
+    name = request.form.get('name')
+    assert name
+    limit_remove(name)
+    return redirect(url_for('web_root'))
+
+
+@app.route('/net/api/limits')
+def api_limits() -> Response:
+    return rt(limits_fetch())
 
 
 def send_notification(msg: str) -> bool:
