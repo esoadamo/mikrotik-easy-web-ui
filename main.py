@@ -426,6 +426,20 @@ def thread_check_cpu() -> None:
 
 
 @retry_on_error
+def thread_remove_old_limits() -> None:
+    while True:
+        limits_to_remove: List[str] = []
+        for limit in limits_fetch():
+            limit_name = limit[0]
+            limit_timeout = limit[4]
+            if limit_timeout and limit_timeout < time():
+                limits_to_remove.append(limit_name)
+        for limit_name in limits_to_remove:
+            limit_remove(limit_name)
+        sleep(60 + randint(30, 50))
+
+
+@retry_on_error
 def thread_write_log() -> None:
     while True:
         line = SELF_LOG_QUEUE.get()
@@ -444,6 +458,7 @@ def main():
     Thread(target=thread_test_dns, daemon=True).start()
     Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
+    Thread(target=thread_remove_old_limits, daemon=True).start()
     app.run(port=8341)
 
 

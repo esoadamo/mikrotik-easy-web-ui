@@ -103,7 +103,11 @@
             elActiveLimits.innerHTML = '';
             for (let limit of data) {
                 const [ name, target, download, upload, until ] = limit;
-                const untilStr = until !== null ? new Date(until * 1000).toISOString() : 'Forever';
+                let untilStr = 'Never';
+                if (until !== null) {
+                    const date = new Date(until * 1000);
+                    untilStr = `${date.getDate()}/${date.getMonth()} ${date.getHours()}:${date.getMinutes()}`;
+                }
                 elActiveLimits.innerHTML += '<tr>';
                 elActiveLimits.innerHTML += `<td>${clientsCache[target] || target}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
                 elActiveLimits.innerHTML += '</tr>';
