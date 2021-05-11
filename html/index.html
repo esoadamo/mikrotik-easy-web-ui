@@ -1,10 +1,11 @@
 <!DOCTYPE html>
+<!--suppress HtmlFormInputWithoutLabel -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <link rel="stylesheet" href="/static/bootstrap.min.css" >
+    <link rel="stylesheet" href="/static/bootstrap.min.css">
     <script src="/static/jquery-3.2.1.slim.min.js"></script>
     <script src="/static/bootstrap.min.js"></script>
 
@@ -44,30 +45,96 @@
                 </table>
             </div>
         </div>
+        <div class="col-lg-12">
+            <h2>Active limits</h2>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Download</th>
+                        <th>Upload</th>
+                        <th>Until</th>
+                        <th>Cancel</th>
+                    </tr>
+                    </thead>
+                    <tbody id="active-limits">
+                    </tbody>
+                </table>
+            </div>
+            <!--suppress HtmlUnknownTarget -->
+            <form method="post" action="/net/api/new-limit">
+            <div class="table-responsive">
+                <table class="table">
+                    <tbody>
+                    <tr>
+                        <td><select name="target" class="form-control" id="newLimitTarget"></select></td>
+                        <td><input name="download" class="form-control" type="number" style="width: 10ex" value="0.75" min="0" step="0.01">MiB</td>
+                        <td><input name="upload" class="form-control" type="number" style="width: 10ex" value="0.5" min="0" step="0.01">MiB</td>
+                        <td><input type="time" name="time"><input name="date" class="form-control" type="date"></td>
+                        <td><button type="submit" class="btn btn-primary">Add</button></td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            </form>
+        </div>
     </div>
 </div>
 
 <script>
     window.onload = () => {
-         let clientsCache = {'10.1.1.1': 'Router'};
+        const clientsCache = {'10.1.1.1': 'Router'};
 
-        const tBodyActiveClients = document.getElementById('active-clients')
-        const getActiveClients = async () => {
-            let data = await (await fetch('api/active-clients')).json();
+        /**
+         * @type HTMLSelectElement
+         */
+        const elNewLimitTarget = document.getElementById('newLimitTarget');
+        elNewLimitTarget.onchange = () => {
+            const option = elNewLimitTarget.selectedOptions[0];
+            option.selected = true;
+            option.classList.add('selected');
+        }
+
+        const tBodyActiveClients = document.getElementById('active-clients');
+        const getClients = async () => {
+            const data = await (await fetch('api/clients')).json();
+            const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
-            clientsCache = {'10.1.1.1': 'Router'};
+            elNewLimitTarget.innerHTML = '<option value="">----</option>';
             for (let client of data) {
-                let clientName = client[1];
-                let clientIP = client[0];
+                /**
+                 * @type {string | null}
+                 */
+                const clientName = client[1];
+                /**
+                 * @type string
+                 */
+                const clientIP = client[0];
+                /**
+                 * @type boolean
+                 */
+                const clientIsActive = client[2];
                 if (clientName !== null) {
                     clientsCache[clientIP] = clientName;
+
+                    const elTargetOption = document.createElement('option');
+                    elTargetOption.innerText = clientName;
+                    elTargetOption.value = clientIP;
+                    if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
+                        elTargetOption.selected = true;
+                        elTargetOption.classList.add('selected');
+                    }
+                    elNewLimitTarget.appendChild(elTargetOption);
                 }
-                tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
+                if (clientIsActive) {
+                    tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
+                }
             }
         }
 
-        getActiveClients();
-        setInterval(() => getActiveClients(), 2200);
+        getClients();
+        setInterval(() => getClients(), 2200);
 
         const tBodyNetUsageByIp = document.getElementById('net-usage-by-ip')
         const getNetUsageByIp = async () => {

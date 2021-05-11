@@ -11,15 +11,15 @@ from threading import Thread, Lock
 from time import sleep
 from time import time
 from types import SimpleNamespace
-from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable
 from uuid import uuid4 as uuid
 
 import requests
-from flask import Flask, Response, render_template, redirect, url_for
+from flask import Flask, Response, render_template, redirect, url_for, request
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 
-CachedRequestActiveClientsCache = List[Tuple[str, Optional[str]]]
+CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
 
 
@@ -31,7 +31,7 @@ class CachedRequest(SimpleNamespace):
 
 
 CACHE: Dict[str, CachedRequest] = {
-    'active-clients': CachedRequest(
+    'clients': CachedRequest(
         cache=[],
         nextRequestTime=0.0,
         nextRequestDelay=0.0,
@@ -104,6 +104,43 @@ def set_doh_enabled(enabled: bool) -> None:
     conn.disconnect()
 
 
+def limit_get_names() -> Iterable[str]:
+    api, conn = get_api()
+    r = map(lambda x: x['name'], api.get_resource('/queue/simple').get())
+    conn.disconnect()
+    return r
+
+
+def limit_remove(name: str) -> None:
+    api, conn = get_api()
+    limits = api.get_resource('/queue/simple')
+    limit_id = limits.get(name=name)[0]['id']
+    limits.remove(id=limit_id)
+    conn.disconnect()
+
+
+def limit_add(name: str, target: str, upload: float, download: float) -> None:
+    """
+    :param name: name of the queue
+    :param target: IP address, /32 is added
+    :param upload: in MiB
+    :param download: in MiB
+    :return: None
+    """
+    for existing_limit_name in limit_get_names():
+        if existing_limit_name == name or existing_limit_name.startswith(f"_{target}"):
+            limit_remove(existing_limit_name)
+            break
+    api, conn = get_api()
+    api.get_resource('/queue/simple').call('add', arguments={
+        'name': name,
+        'target': f"{target}/32",
+        'max-limit': "%.2fM/%.2fM" % (upload * 8, download * 8)
+    })
+    print("%.2fM/%.2fM" % (upload * 8, download * 8))
+    conn.disconnect()
+
+
 def log(*args) -> None:
     date = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
     line = ' '.join([str(x) for x in args])
@@ -141,15 +178,15 @@ def get_sniffer_running() -> bool:
 
 
 @retry_on_error
-def get_active_clients() -> CachedRequestActiveClientsCache:
+def get_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
     res = api.get_resource('/ip/dhcp-server/lease').get()
     conn.disconnect()
-    r: List[Tuple[str, Optional[str]]] = []
+    r: List[Tuple[str, Optional[str], bool]] = []
     for client in res:
-        if client.get('address', '') == '10.1.1.1' or client.get('status', '') != 'bound':
+        if client.get('address', '') == '10.1.1.1':
             continue
-        r.append((client.get('address'), client.get('comment')))
+        r.append((client.get('address'), client.get('comment'), client.get('status', '') == 'bound'))
     return r
 
 
@@ -195,21 +232,21 @@ def web_root() -> Response:
     return render_template('index.html')
 
 
-@app.route('/net/api/active-clients')
-def api_active_clients() -> Response:
-    entry = CACHE['active-clients']
+@app.route('/net/api/clients')
+def api_clients() -> Response:
+    entry = CACHE['clients']
     time_to_next_request = entry.nextRequestTime - time()
     lock: Lock = entry.lock
     if time_to_next_request < 0 and lock.acquire(blocking=False):
         if entry.nextRequestTime and time_to_next_request < -5 * 60:
-            entry.nextRequestDelay = 2
+            entry.nextRequestDelay = 30
         else:
-            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 10)
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 60)
         entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
             try:
-                entry.cache = get_active_clients()
+                entry.cache = get_clients()
             finally:
                 lock.release()
 
@@ -225,9 +262,9 @@ def api_net_usage_by_ip() -> Response:
     lock: Lock = entry.lock
     if time_to_next_request < 0 and lock.acquire(blocking=False):
         if entry.nextRequestTime and time_to_next_request < -5 * 60:
-            entry.nextRequestDelay = 2
+            entry.nextRequestDelay = 5
         else:
-            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 30)
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.5 + randint(0, 20) / 10, 30)
         entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
@@ -238,6 +275,30 @@ def api_net_usage_by_ip() -> Response:
 
         Thread(target=job, daemon=True).start()
     return rt(entry.cache)
+
+
+@app.route('/net/api/new-limit', methods=['POST'])
+def api_new_limit() -> Response:
+    target = request.form.get('target')
+    assert target
+    upload = max(float(request.form.get('upload')), 0.1)
+    download = max(float(request.form.get('download')), 0.1)
+    until_date = request.form.get('date')
+    until_time = request.form.get('time')
+
+    if not until_date and not until_time:
+        ttl = 'EVER'
+    elif not until_time and until_date:
+        ttl = str(int(datetime.strptime(until_date, '%Y-%m-%d').timestamp()))
+    elif until_time and not until_date:
+        hours, minutes = until_time.split(':')
+        ttl = str(int(datetime.now().replace(hour=0, minute=0).timestamp() + (int(hours) * 3600) + (int(minutes) * 60)))
+    else:
+        ttl = str(int(datetime.strptime(f"{until_date} {until_time}", '%Y-%m-%d %H:%M').timestamp()))
+
+    limit_add(f"_{target}_{ttl}", target, upload, download)
+
+    return redirect(url_for('web_root'))
 
 
 def send_notification(msg: str) -> bool:
@@ -323,6 +384,7 @@ def thread_test_dns() -> None:
 @retry_on_error
 def thread_check_cpu() -> None:
     while True:
+        # noinspection HttpUrlsUsage
         html = requests.get(f'http://{ROUTER_ADDRESS}/graphs/cpu/', timeout=60).text
         for r in re.finditer(r'Max:\s+[0-9]+%;\s+Average:\s+[0-9]+%;\s+Current:\s+([0-9]+)%', html, re.I):
             current_usage = int(r.group(1))
