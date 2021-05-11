@@ -296,7 +296,8 @@ def api_net_usage_by_ip() -> Response:
 @app.route('/net/api/new-limit', methods=['POST'])
 def api_new_limit() -> Response:
     target = request.form.get('target')
-    assert target
+    if not target:
+        return rt({'error': 'No target specified'})
     upload = max(float(request.form.get('upload')), 0.1)
     download = max(float(request.form.get('download')), 0.1)
     until_date = request.form.get('date')
