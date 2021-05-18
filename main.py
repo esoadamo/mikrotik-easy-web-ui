@@ -151,7 +151,7 @@ def limits_fetch() -> RequestLimits:
             continue
         _, target, timeout = name.split('_')
         upload, download = limit.get('max-limit').split('/')
-        timeout = int(timeout) if timeout != 'EVA' else None
+        timeout = int(timeout) if timeout != 'EVER' else None
         r.append((name, str(target), int(download) / 8000000, int(upload) / 8000000, timeout))
     conn.disconnect()
     return r
