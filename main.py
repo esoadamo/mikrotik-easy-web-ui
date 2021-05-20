@@ -49,6 +49,7 @@ CACHE: Dict[str, CachedRequest] = {
 app = Flask(__name__, static_folder='static', template_folder='html')
 
 ROUTER_ADDRESS = '10.1.1.1'
+LOCAL_NETWORK = '10.1.1.0/24'
 FILE_ROUTER_LOG = Path('/var/log/router.log')
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path('/var/log/router_api.log')
@@ -135,7 +136,7 @@ def limit_add(name: str, target: str, upload: float, download: float) -> None:
     api, conn = get_api()
     api.get_resource('/queue/simple').call('add', arguments={
         'name': name,
-        'target': f"{target}/32",
+        'target': f"{target}/32" if target != "EVERYONE" else LOCAL_NETWORK,
         'max-limit': "%.2fM/%.2fM" % (upload * 8, download * 8)
     })
     print("%.2fM/%.2fM" % (upload * 8, download * 8))

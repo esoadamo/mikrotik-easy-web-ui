@@ -108,8 +108,9 @@
                     const date = new Date(until * 1000);
                     untilStr = `${date.getDate()}/${date.getMonth()} ${date.getHours()}:${date.getMinutes()}`;
                 }
+                const friendlyName = target === "EVERYONE" ? "Everyone" : clientsCache[target] || target;
                 elActiveLimits.innerHTML += '<tr>';
-                elActiveLimits.innerHTML += `<td>${clientsCache[target] || target}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
+                elActiveLimits.innerHTML += `<td>${friendlyName}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
                 elActiveLimits.innerHTML += '</tr>';
             }
         }
@@ -119,7 +120,21 @@
             const data = await (await fetch('api/clients')).json();
             const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
-            elNewLimitTarget.innerHTML = '<option value="">----</option>';
+            elNewLimitTarget.innerHTML = '';
+
+            function addLimitOption(name, value) {
+                const elTargetOption = document.createElement('option');
+                    elTargetOption.innerText = name;
+                    elTargetOption.value = value;
+                    if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
+                        elTargetOption.selected = true;
+                        elTargetOption.classList.add('selected');
+                    }
+                    elNewLimitTarget.appendChild(elTargetOption);
+            }
+            addLimitOption('---', "");
+            addLimitOption('@Everyone@', "EVERYONE");
+
             for (let client of data) {
                 /**
                  * @type {string | null}
@@ -135,15 +150,7 @@
                 const clientIsActive = client[2];
                 if (clientName !== null) {
                     clientsCache[clientIP] = clientName;
-
-                    const elTargetOption = document.createElement('option');
-                    elTargetOption.innerText = clientName;
-                    elTargetOption.value = clientIP;
-                    if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
-                        elTargetOption.selected = true;
-                        elTargetOption.classList.add('selected');
-                    }
-                    elNewLimitTarget.appendChild(elTargetOption);
+                    addLimitOption(clientName, clientIP);
                 }
                 if (clientIsActive) {
                     tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
