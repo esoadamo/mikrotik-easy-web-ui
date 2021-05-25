@@ -59,6 +59,7 @@ app = Flask(__name__, static_folder='static', template_folder='html')
 ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
 WEB_PORT = os.getenv('WEB_UI_PORT')
+DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
 FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG'))
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path(os.getenv('LOG'))
@@ -117,10 +118,12 @@ def is_dns_healthy() -> bool:
 def set_doh_enabled(enabled: bool) -> None:
     api, conn = get_api()
     if enabled:
-        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': 'https://cloudflare-dns.com/dns-query',
-                                                           'verify-doh-cert': 'yes'})
+        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': DoH_SERVER,
+                                                           'verify-doh-cert': 'yes',
+                                                           'servers': ''})
     else:
-        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': ''})
+        api.get_resource('/ip/dns').call('set', arguments={'use-doh-server': '',
+                                                           'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8'})
     conn.disconnect()
 
 
@@ -485,10 +488,12 @@ def main() -> int:
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
-    Thread(target=thread_test_dns, daemon=True).start()
     Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
     Thread(target=thread_remove_old_limits, daemon=True).start()
+    if DoH_SERVER is not None:
+        set_doh_enabled(True)
+        Thread(target=thread_test_dns, daemon=True).start()
     app.run(port=int(WEB_PORT))
     return 0
 

@@ -47,3 +47,7 @@ Client names should be set as comments inside `IP -> DHCP Server -> Leases -> {c
 
 Disable fasttrack. `IP -> Firewall -> Filter Rules -> Fasttrack`
 
+### DNS not working when AUTO_DOH is enabled
+
+Make sure that you have downloaded and imported correct certificate for your DOH server
+
