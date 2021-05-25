@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import requests
 import traceback
 from datetime import datetime
@@ -23,6 +24,8 @@ try:
     import notification
 except ImportError:
     notification = None
+
+load_dotenv()
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
@@ -53,11 +56,12 @@ CACHE: Dict[str, CachedRequest] = {
 
 app = Flask(__name__, static_folder='static', template_folder='html')
 
-ROUTER_ADDRESS = '10.1.1.1'
-LOCAL_NETWORK = '10.1.1.0/24'
-FILE_ROUTER_LOG = Path('/var/log/router.log')
+ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
+LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
+WEB_PORT = os.getenv('WEB_UI_PORT')
+FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG'))
 LOCK_ROUTER_LOG = Lock()
-FILE_SELF_LOG = Path('/var/log/router_api.log')
+FILE_SELF_LOG = Path(os.getenv('LOG'))
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 
 
@@ -65,10 +69,19 @@ def rt(data: any) -> Response:
     return Response(json.dumps(data), mimetype='application/json')
 
 
+def get_login_credentials() -> Optional[Tuple[str, str]]:
+    username = os.getenv('ROUTER_USER')
+    password = os.getenv('ROUTER_PASSWORD')
+    if not username or not password:
+        return None
+    return username, password
+
+
 def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
+    username, password = get_login_credentials()
     conn = RouterOsApiPool(ROUTER_ADDRESS,
-                           username='api',
-                           password=r"""12df4c479a4189367aba29e1eb74983479b15440ae321115626806fbd9858915""",
+                           username=username,
+                           password=password,
                            use_ssl=True,
                            ssl_verify=False,
                            plaintext_login=True)
@@ -84,7 +97,7 @@ def retry_on_error(f: Callable) -> Callable:
             except Exception:
                 exc = traceback.format_exc()
                 log('[ERROR] Retrying')
-                log('[TRACEBACK]', exc)
+                log('[TRACEBACK]', exc.replace('\n', '\n           '))
                 sleep(60)
 
     return i
@@ -144,7 +157,6 @@ def limit_add(name: str, target: str, upload: float, download: float) -> None:
         'target': f"{target}/32" if target != "EVERYONE" else LOCAL_NETWORK,
         'max-limit': "%.2fM/%.2fM" % (upload * 8, download * 8)
     })
-    print("%.2fM/%.2fM" % (upload * 8, download * 8))
     conn.disconnect()
 
 
@@ -230,8 +242,8 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
             continue
         ip_speed[ip_from] = (speed_down, speed_up)
 
-    router_ip = '10.1.1.1'
-    server_ip = '10.1.1.10'
+    router_ip = ROUTER_ADDRESS
+    server_ip = os.getenv('LOCAL_ADDRESS')
     if router_ip in ip_speed and server_ip in ip_speed:
         router_down, router_up = ip_speed[router_ip]
         server_down, server_up = ip_speed[server_ip]
@@ -338,7 +350,9 @@ def api_limits() -> Response:
 
 
 def send_notification(msg: str) -> bool:
-    return requests.get('https://api.ahlava.cz/msg/' + msg, timeout=60).status_code == 200
+    if notification is not None:
+        return False
+    return notification.send_notification(msg)
 
 
 @retry_on_error
@@ -378,14 +392,15 @@ def thread_notif_logged_errors() -> None:
                 continue
             topics: List[str] = rec.get('topics', '').split(',')
 
-            with LOCK_ROUTER_LOG:
-                try:
-                    with FILE_ROUTER_LOG.open('a') as f:
-                        rec_log_data = {'timestamp': int(time())}
-                        rec_log_data.update(rec)
-                        f.write(json.dumps(rec_log_data) + '\n')
-                except PermissionError:
-                    log('[FATAL] [LOG] cannot write log to a file')
+            if FILE_ROUTER_LOG and FILE_ROUTER_LOG.is_dir():
+                with LOCK_ROUTER_LOG:
+                    try:
+                        with FILE_ROUTER_LOG.open('a') as f:
+                            rec_log_data = {'timestamp': int(time())}
+                            rec_log_data.update(rec)
+                            f.write(json.dumps(rec_log_data) + '\n')
+                    except PermissionError:
+                        log('[FATAL] [LOG] cannot write log to a file')
 
             if 'error' not in topics:
                 continue
@@ -450,6 +465,8 @@ def thread_remove_old_limits() -> None:
 def thread_write_log() -> None:
     while True:
         line = SELF_LOG_QUEUE.get()
+        if not FILE_SELF_LOG or FILE_SELF_LOG.is_dir():
+            continue
         try:
             with FILE_SELF_LOG.open('a') as f:
                 f.write(line + '\n')
@@ -457,8 +474,14 @@ def thread_write_log() -> None:
             print(f'[LOG] Fatal: Cannot access log file "{FILE_SELF_LOG}"')
 
 
-def main():
+def main() -> int:
     log("[MAIN] starting up")
+    if not get_login_credentials():
+        log("[MAIN] Error: Login credentials are missing!")
+        return 1
+    if not WEB_PORT or not LOCAL_NETWORK or not ROUTER_ADDRESS:
+        log("[MAIN] Error: Some required settings are missing")
+        return 1
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
@@ -466,8 +489,9 @@ def main():
     Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
     Thread(target=thread_remove_old_limits, daemon=True).start()
-    app.run(port=8341)
+    app.run(port=int(WEB_PORT))
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    exit(main())

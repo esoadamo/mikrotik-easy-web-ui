@@ -2,3 +2,5 @@ venv/
 wenv/
 .idea/
 __pycache__/
+.env
+notification.py
