@@ -1,3 +1,4 @@
 def send_notification(msg: str) -> bool:
-    print("NEW NOTIFICATION:", msg)
-    return True
+    raise NotImplementedError("Somebody has forgot to implement notifications")
+    # print("IMPORTANT! You got new notification:", msg)
+    # return True
