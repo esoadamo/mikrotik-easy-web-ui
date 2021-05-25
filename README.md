@@ -37,3 +37,13 @@ nano .env
 cp notification.sample.py notification.py  # and then edit function send_notification 
 ```
 
+## Troubleshooting
+
+### No client names (just IP adresses instead of them)
+
+Client names should be set as comments inside `IP -> DHCP Server -> Leases -> {client}`
+
+### Limits are not working
+
+Disable fasttrack. `IP -> Firewall -> Filter Rules -> Fasttrack`
+
