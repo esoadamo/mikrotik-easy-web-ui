@@ -92,6 +92,7 @@
          */
         const elNewLimitTarget = document.getElementById('newLimitTarget');
         elNewLimitTarget.onchange = () => {
+            elNewLimitTarget.querySelectorAll('.selected').forEach((x) => x.classList.remove('selected'));
             const option = elNewLimitTarget.selectedOptions[0];
             option.selected = true;
             option.classList.add('selected');
