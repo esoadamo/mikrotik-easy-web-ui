@@ -1,5 +1,6 @@
 import json
 import re
+import requests
 import traceback
 from datetime import datetime
 from hashlib import md5
@@ -13,11 +14,15 @@ from time import time
 from types import SimpleNamespace
 from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable
 from uuid import uuid4 as uuid
-
-import requests
+from dotenv import load_dotenv
 from flask import Flask, Response, render_template, redirect, url_for, request
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
+
+try:
+    import notification
+except ImportError:
+    notification = None
 
 CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
