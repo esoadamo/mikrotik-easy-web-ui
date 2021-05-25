@@ -22,9 +22,9 @@ from routeros_api.api import RouterOsApi
 from gevent.pywsgi import WSGIServer
 
 try:
-    import notification
+    import notification as notification_module
 except ImportError:
-    notification = None
+    notification_module = None
 
 load_dotenv()
 
@@ -354,9 +354,9 @@ def api_limits() -> Response:
 
 
 def send_notification(msg: str) -> bool:
-    if notification is not None:
+    if notification_module is None:
         return False
-    return notification.send_notification(msg)
+    return notification_module.send_notification(msg)
 
 
 @retry_on_error
@@ -497,7 +497,10 @@ def main() -> int:
         Thread(target=thread_test_dns, daemon=True).start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}/net")
     http_server = WSGIServer(('', int(WEB_PORT)), app)
-    http_server.serve_forever()
+    try:
+        http_server.serve_forever()
+    except KeyboardInterrupt:
+        log("[MAIN] Shutting down")
     return 0
 
 
