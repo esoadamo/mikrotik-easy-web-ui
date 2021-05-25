@@ -51,3 +51,10 @@ Disable fasttrack. `IP -> Firewall -> Filter Rules -> Fasttrack`
 
 Make sure that you have downloaded and imported correct certificate for your DOH server
 
+### Missing `bdist_wheel` during installation
+
+On Ubuntu, you need to make sure that you have following packages installed:
+
+```bash
+sudo apt-get install python3-dev python3-pip python3-venv python3-wheel -y
+```

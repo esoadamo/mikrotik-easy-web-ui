@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, render_template, redirect, url_for, request
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
+from gevent.pywsgi import WSGIServer
 
 try:
     import notification
@@ -60,9 +61,9 @@ ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
 WEB_PORT = os.getenv('WEB_UI_PORT')
 DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
-FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG'))
+FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG')) if os.getenv('ROUTER_LOG') is not None else None
 LOCK_ROUTER_LOG = Lock()
-FILE_SELF_LOG = Path(os.getenv('LOG'))
+FILE_SELF_LOG = Path(os.getenv('LOG')) if os.getenv('LOG') is not None else None
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 
 
@@ -395,7 +396,7 @@ def thread_notif_logged_errors() -> None:
                 continue
             topics: List[str] = rec.get('topics', '').split(',')
 
-            if FILE_ROUTER_LOG and FILE_ROUTER_LOG.is_dir():
+            if FILE_ROUTER_LOG:
                 with LOCK_ROUTER_LOG:
                     try:
                         with FILE_ROUTER_LOG.open('a') as f:
@@ -466,10 +467,10 @@ def thread_remove_old_limits() -> None:
 
 @retry_on_error
 def thread_write_log() -> None:
+    if not FILE_SELF_LOG:
+        return
     while True:
         line = SELF_LOG_QUEUE.get()
-        if not FILE_SELF_LOG or FILE_SELF_LOG.is_dir():
-            continue
         try:
             with FILE_SELF_LOG.open('a') as f:
                 f.write(line + '\n')
@@ -494,7 +495,9 @@ def main() -> int:
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
-    app.run(port=int(WEB_PORT))
+    log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}/net")
+    http_server = WSGIServer(('', int(WEB_PORT)), app)
+    http_server.serve_forever()
     return 0
 
 
