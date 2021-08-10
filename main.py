@@ -485,22 +485,29 @@ def thread_monitor_dns() -> None:
         return
     file_bad_domains = Path(DNS_MONITOR_DOMAINS_FILE)
 
-    bad_domains: Set[str] = set()
+    filtered_bad_domains: Set[str] = set()
     with file_bad_domains.open('r') as f:
-        bad_domains.update(map(lambda x: x.strip(), f.readlines()))
+        filtered_bad_domains.update(map(lambda x: x.strip(), f.readlines()))
+
+    seen_bad_domains_last: Set[str] = set()
 
     while True:
         api, conn = get_api()
         cache = api.get_resource('/ip/dns/cache').get()
+        seen_bad_domains_now: Set[str] = set()
         for record in cache:
             name: str = record['name']
             data: str = record['data']
-            for bad_domain in bad_domains:
+            for bad_domain in filtered_bad_domains:
                 if bad_domain in name or bad_domain in data:
+                    seen_bad_domains_now.add(bad_domain)
+                    if bad_domain in seen_bad_domains_last:
+                        continue
                     message = f"[DNS MONITOR] Bad domain accessed '{name}' -> '{data}'"
                     log(message)
                     send_notification(message)
         conn.disconnect()
+        seen_bad_domains_last = seen_bad_domains_now
         sleep(5 * 60 + randint(0, 280))
 
 
