@@ -64,6 +64,7 @@ DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
 FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG')) if os.getenv('ROUTER_LOG') is not None else None
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path(os.getenv('LOG')) if os.getenv('LOG') is not None else None
+DNS_MONITOR_DOMAINS_FILE = os.getenv('DNS_MONITOR_DOMAINS_FILE')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 
 
@@ -266,7 +267,7 @@ def web_index() -> Response:
 
 
 @app.route('/net/')
-def web_root() -> Response:
+def web_root() -> str:
     return render_template('index.html')
 
 
@@ -478,6 +479,31 @@ def thread_write_log() -> None:
             print(f'[LOG] Fatal: Cannot access log file "{FILE_SELF_LOG}"')
 
 
+@retry_on_error
+def thread_monitor_dns() -> None:
+    if DNS_MONITOR_DOMAINS_FILE is None:
+        return
+    file_bad_domains = Path(DNS_MONITOR_DOMAINS_FILE)
+
+    bad_domains: Set[str] = set()
+    with file_bad_domains.open('r') as f:
+        bad_domains.update(map(lambda x: x.strip(), f.readlines()))
+
+    while True:
+        api, conn = get_api()
+        cache = api.get_resource('/ip/dns/cache').get()
+        for record in cache:
+            name: str = record['name']
+            data: str = record['data']
+            for bad_domain in bad_domains:
+                if bad_domain in name or bad_domain in data:
+                    message = f"[DNS MONITOR] Bad domain accessed '{name}' -> '{data}'"
+                    log(message)
+                    send_notification(message)
+        conn.disconnect()
+        sleep(5 * 60 + randint(0, 280))
+
+
 def main() -> int:
     log("[MAIN] starting up")
     if not get_login_credentials():
@@ -492,6 +518,7 @@ def main() -> int:
     Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
     Thread(target=thread_remove_old_limits, daemon=True).start()
+    Thread(target=thread_monitor_dns, daemon=True).start()
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()

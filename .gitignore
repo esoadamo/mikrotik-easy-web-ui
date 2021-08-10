@@ -4,3 +4,4 @@ wenv/
 __pycache__/
 .env
 notification.py
+mock/

@@ -12,6 +12,7 @@
 - router error notifications
 - high CPU usage notification
 - available update notification
+- dns monitor for accessing bad domains
 
 ## Installation
 
