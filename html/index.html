@@ -5,9 +5,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
+    <!--suppress HtmlUnknownTarget -->
     <link rel="stylesheet" href="static/bootstrap.min.css">
+    <!--suppress HtmlUnknownTarget -->
     <script src="static/jquery-3.2.1.slim.min.js"></script>
+    <!--suppress HtmlUnknownTarget -->
     <script src="static/bootstrap.min.js"></script>
+    <!--suppress HtmlUnknownTarget -->
     <link rel="icon" type="image/png" href="static/icon.png">
 
     <title>Home net monitor</title>
@@ -48,36 +52,36 @@
         </div>
         <div class="col-lg-12">
             <h2>Active limits</h2>
-            <div class="table-responsive">
-                <table class="table">
-                    <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Download</th>
-                        <th>Upload</th>
-                        <th>Until</th>
-                        <th>Cancel</th>
-                    </tr>
-                    </thead>
-                    <tbody id="active-limits">
-                    </tbody>
-                </table>
-            </div>
             <!--suppress HtmlUnknownTarget -->
             <form method="post" action="api/new-limit">
-            <div class="table-responsive">
-                <table class="table">
-                    <tbody>
-                    <tr>
-                        <td><select name="target" class="form-control" id="newLimitTarget"></select></td>
-                        <td><input name="download" class="form-control" type="number" style="width: 10ex" value="0.75" min="0" step="0.01">MiB</td>
-                        <td><input name="upload" class="form-control" type="number" style="width: 10ex" value="0.5" min="0" step="0.01">MiB</td>
-                        <td><input type="time" name="time"><input name="date" class="form-control" type="date"></td>
-                        <td><button type="submit" class="btn btn-primary">Add</button></td>
-                    </tr>
-                    </tbody>
-                </table>
-            </div>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Download</th>
+                            <th>Upload</th>
+                            <th>Until</th>
+                            <th>Cancel</th>
+                        </tr>
+                        </thead>
+                        <tbody id="active-limits">
+                        <tr id="row-new-limit" class="no-auto-gen">
+                            <td><select name="target" class="form-control" id="newLimitTarget"></select></td>
+                            <td><input name="download" class="form-control" type="number" style="width: 10ex"
+                                       value="0.75" min="0" step="0.01">MiB
+                            </td>
+                            <td><input name="upload" class="form-control" type="number" style="width: 10ex" value="0.5"
+                                       min="0" step="0.01">MiB
+                            </td>
+                            <td><input type="time" name="time"><input name="date" class="form-control" type="date"></td>
+                            <td>
+                                <button type="submit" class="btn btn-primary">Add</button>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
             </form>
         </div>
     </div>
@@ -94,12 +98,12 @@
         const httpGet = (url) => {
             return new Promise((resolve, reject) => {
                 const req = new XMLHttpRequest();
-                req.onreadystatechange = function() {
-                    if (this.readyState === 4) {
-                        if (this.status === 200) {
+                req.onreadystatechange = () => {
+                    if (req.readyState === 4) {
+                        if (req.status === 200) {
                             resolve(JSON.parse(req.responseText));
                         } else {
-                            reject(`HTTP error status: ${this.status}`, req)
+                            reject(`HTTP error status: ${req.status}`, req)
                         }
                     }
                 };
@@ -122,20 +126,26 @@
         }
 
         const elActiveLimits = document.getElementById('active-limits');
+        const elRowNewLimit = document.getElementById('row-new-limit');
         const getActiveLimits = async () => {
             const data = await httpGet('api/limits');
-            elActiveLimits.innerHTML = '';
+
+            [...elActiveLimits.children]
+                .filter((child) => !child?.classList.contains('no-auto-gen'))
+                .forEach((child) => child?.parentElement.removeChild(child));
+
             for (let limit of data) {
-                const [ name, target, download, upload, until ] = limit;
+                const [name, target, download, upload, until] = limit;
                 let untilStr = 'Never';
                 if (until !== null) {
                     const date = new Date(until * 1000);
                     untilStr = `${date.getDate()}/${date.getMonth()} ${date.getHours()}:${date.getMinutes()}`;
                 }
                 const friendlyName = target === "EVERYONE" ? "Everyone" : clientsCache[target] || target;
-                elActiveLimits.innerHTML += '<tr>';
-                elActiveLimits.innerHTML += `<td>${friendlyName}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
-                elActiveLimits.innerHTML += '</tr>';
+
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${friendlyName}</td><td>${download}MiB</td><td>${upload}MiB</td><td>${untilStr}</td><td><form method="POST" action="api/limit-remove"><input style="display: none" name="name" type="text" value="${name}"><button class="btn btn-danger" type="submit">X</button></form></td>`;
+                elActiveLimits.insertBefore(row, elRowNewLimit);
             }
         }
 
@@ -144,18 +154,36 @@
             const data = await httpGet('api/clients');
             const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
-            elNewLimitTarget.innerHTML = '';
 
+            const existingLimitTargetNames = new Set([...elNewLimitTarget.querySelectorAll('option')]
+                .map((option) => option?.innerText).filter((name) => !!name));
+            const newLimitTargetNames = new Set();
+
+            /**
+             * Adds a new limit target or updates it if already exists
+             * @param name {string}
+             * @param value {string}
+             */
             function addLimitOption(name, value) {
-                const elTargetOption = document.createElement('option');
+                newLimitTargetNames.add(name);
+                let existingTargetOption = [...elNewLimitTarget.querySelectorAll('option')].find((ch) => ch?.innerText === name);
+
+                const elTargetOption = existingTargetOption || document.createElement('option');
+                if (elTargetOption.innerText !== name) {
                     elTargetOption.innerText = name;
+                }
+                if (elTargetOption.value !== value) {
                     elTargetOption.value = value;
-                    if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
-                        elTargetOption.selected = true;
-                        elTargetOption.classList.add('selected');
-                    }
+                }
+                if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
+                    elTargetOption.selected = true;
+                    elTargetOption.classList.add('selected');
+                }
+                if (!existingTargetOption) {
                     elNewLimitTarget.appendChild(elTargetOption);
+                }
             }
+
             addLimitOption('---', "");
             addLimitOption('@Everyone@', "EVERYONE");
 
@@ -180,10 +208,25 @@
                     tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
                 }
             }
+
+            // remove old target names
+            existingLimitTargetNames.forEach((name) => {
+                if (newLimitTargetNames.has(name)) {
+                    return;
+                }
+                /**
+                 * @type {HTMLElement}
+                 */
+                const el = [...elNewLimitTarget.querySelectorAll('option')].find((ch) => ch?.innerText === name);
+                if (el) {
+                    el.parentElement.removeChild(el);
+                }
+            });
         }
 
         getClients().then(() => getActiveLimits());
         setInterval(() => getClients(), 2200);
+        setInterval(() => getActiveLimits(), 24000);
 
         const tBodyNetUsageByIp = document.getElementById('net-usage-by-ip')
         const getNetUsageByIp = async () => {
