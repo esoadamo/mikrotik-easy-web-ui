@@ -1,4 +1,5 @@
 Flask
+Flask-HTTPAuth
 RouterOS-api
 requests
 python-dotenv

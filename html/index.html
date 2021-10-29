@@ -85,6 +85,28 @@
 <!--suppress HtmlUnknownTarget -->
 <script>
     window.onload = () => {
+        /**
+         * HTTP get for given URL
+         * @param url {string} URL
+         * @returns Promise<Object>
+         */
+        const httpGet = (url) => {
+            return new Promise((resolve, reject) => {
+                const req = new XMLHttpRequest();
+                req.onreadystatechange = function() {
+                    if (this.readyState === 4) {
+                        if (this.status === 200) {
+                            resolve(JSON.parse(req.responseText));
+                        } else {
+                            reject(`HTTP error status: ${this.status}`, req)
+                        }
+                    }
+                };
+                req.open("GET", url, true);
+                req.send();
+            });
+        }
+
         const clientsCache = {'10.1.1.1': 'Router'};
 
         /**
@@ -100,7 +122,7 @@
 
         const elActiveLimits = document.getElementById('active-limits');
         const getActiveLimits = async () => {
-            const data = await (await fetch('api/limits')).json();
+            const data = await httpGet('api/limits');
             elActiveLimits.innerHTML = '';
             for (let limit of data) {
                 const [ name, target, download, upload, until ] = limit;
@@ -118,7 +140,7 @@
 
         const tBodyActiveClients = document.getElementById('active-clients');
         const getClients = async () => {
-            const data = await (await fetch('api/clients')).json();
+            const data = await httpGet('api/clients');
             const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
             elNewLimitTarget.innerHTML = '';
@@ -164,7 +186,7 @@
 
         const tBodyNetUsageByIp = document.getElementById('net-usage-by-ip')
         const getNetUsageByIp = async () => {
-            let data = await (await fetch('api/net-usage-by-ip')).json();
+            let data = await httpGet('api/net-usage-by-ip');
             tBodyNetUsageByIp.innerHTML = '';
             for (let client of Object.keys(data)) {
                 tBodyNetUsageByIp.innerHTML += `<tr><td>${clientsCache[client] || client}</td><td>${data[client][0]} kB/s</td><td>${data[client][1]} kB/s</td></tr>`;
