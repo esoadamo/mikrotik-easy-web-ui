@@ -275,17 +275,12 @@ def verify_password(username: str, password: str):
 
 
 @app.route('/')
-def web_index() -> Response:
-    return redirect(url_for('web_root'))
-
-
-@app.route('/net/')
 @auth.login_required
 def web_root() -> str:
     return render_template('index.html')
 
 
-@app.route('/net/api/clients')
+@app.route('/api/clients')
 @auth.login_required
 def api_clients() -> Response:
     entry = CACHE['clients']
@@ -309,7 +304,7 @@ def api_clients() -> Response:
     return rt(entry.cache)
 
 
-@app.route('/net/api/net-usage-by-ip')
+@app.route('/api/net-usage-by-ip')
 @auth.login_required
 def api_net_usage_by_ip() -> Response:
     entry = CACHE['net-usage-by-ip']
@@ -332,7 +327,7 @@ def api_net_usage_by_ip() -> Response:
     return rt(entry.cache)
 
 
-@app.route('/net/api/new-limit', methods=['POST'])
+@app.route('/api/new-limit', methods=['POST'])
 @auth.login_required
 def api_new_limit() -> Response:
     target = request.form.get('target')
@@ -358,7 +353,7 @@ def api_new_limit() -> Response:
     return redirect(url_for('web_root'))
 
 
-@app.route('/net/api/limit-remove', methods=['POST'])
+@app.route('/api/limit-remove', methods=['POST'])
 @auth.login_required
 def api_limit_remove() -> Response:
     name = request.form.get('name')
@@ -367,7 +362,7 @@ def api_limit_remove() -> Response:
     return redirect(url_for('web_root'))
 
 
-@app.route('/net/api/limits')
+@app.route('/api/limits')
 @auth.login_required
 def api_limits() -> Response:
     return rt(limits_fetch())
@@ -548,7 +543,7 @@ def main() -> int:
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
-    log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}/net")
+    log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
     http_server = WSGIServer(('', int(WEB_PORT)), app)
     try:
         http_server.serve_forever()
