@@ -20,6 +20,7 @@ from flask import Flask, Response, render_template, redirect, url_for, request
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 from gevent.pywsgi import WSGIServer
+from flask_httpauth import HTTPBasicAuth
 
 try:
     import notification as notification_module
@@ -56,6 +57,7 @@ CACHE: Dict[str, CachedRequest] = {
 }
 
 app = Flask(__name__, static_folder='static', template_folder='html')
+auth = HTTPBasicAuth()
 
 ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
@@ -65,6 +67,8 @@ FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG')) if os.getenv('ROUTER_LOG') is no
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path(os.getenv('LOG')) if os.getenv('LOG') is not None else None
 DNS_MONITOR_DOMAINS_FILE = os.getenv('DNS_MONITOR_DOMAINS_FILE')
+UI_USER: Optional[str] = os.getenv('UI_USER')
+UI_PASSWORD: Optional[str] = os.getenv('UI_PASSWORD')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 
 
@@ -261,17 +265,28 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     return ip_speed
 
 
+@auth.verify_password
+def verify_password(username: str, password: str):
+    if UI_USER is not None and username != UI_USER:
+        return False
+    if UI_PASSWORD is not None and password != UI_PASSWORD:
+        return False
+    return True
+
+
 @app.route('/')
 def web_index() -> Response:
     return redirect(url_for('web_root'))
 
 
 @app.route('/net/')
+@auth.login_required
 def web_root() -> str:
     return render_template('index.html')
 
 
 @app.route('/net/api/clients')
+@auth.login_required
 def api_clients() -> Response:
     entry = CACHE['clients']
     time_to_next_request = entry.nextRequestTime - time()
@@ -295,6 +310,7 @@ def api_clients() -> Response:
 
 
 @app.route('/net/api/net-usage-by-ip')
+@auth.login_required
 def api_net_usage_by_ip() -> Response:
     entry = CACHE['net-usage-by-ip']
     time_to_next_request = entry.nextRequestTime - time()
@@ -317,6 +333,7 @@ def api_net_usage_by_ip() -> Response:
 
 
 @app.route('/net/api/new-limit', methods=['POST'])
+@auth.login_required
 def api_new_limit() -> Response:
     target = request.form.get('target')
     if not target:
@@ -342,6 +359,7 @@ def api_new_limit() -> Response:
 
 
 @app.route('/net/api/limit-remove', methods=['POST'])
+@auth.login_required
 def api_limit_remove() -> Response:
     name = request.form.get('name')
     assert name
@@ -350,6 +368,7 @@ def api_limit_remove() -> Response:
 
 
 @app.route('/net/api/limits')
+@auth.login_required
 def api_limits() -> Response:
     return rt(limits_fetch())
 
