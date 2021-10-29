@@ -154,17 +154,34 @@
             const data = await httpGet('api/clients');
             const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
-            elNewLimitTarget.innerHTML = '';
 
+            const existingLimitTargetNames = new Set([...elNewLimitTarget.querySelectorAll('option')]
+                .map((option) => option?.innerText).filter((name) => !!name));
+            const newLimitTargetNames = new Set();
+
+            /**
+             * Adds a new limit target or updates it if already exists
+             * @param name {string}
+             * @param value {string}
+             */
             function addLimitOption(name, value) {
-                const elTargetOption = document.createElement('option');
-                elTargetOption.innerText = name;
-                elTargetOption.value = value;
+                newLimitTargetNames.add(name);
+                let existingTargetOption = [...elNewLimitTarget.querySelectorAll('option')].find((ch) => ch?.innerText === name);
+
+                const elTargetOption = existingTargetOption || document.createElement('option');
+                if (elTargetOption.innerText !== name) {
+                    elTargetOption.innerText = name;
+                }
+                if (elTargetOption.value !== value) {
+                    elTargetOption.value = value;
+                }
                 if (newLimitTargetValue && elTargetOption.value === newLimitTargetValue) {
                     elTargetOption.selected = true;
                     elTargetOption.classList.add('selected');
                 }
-                elNewLimitTarget.appendChild(elTargetOption);
+                if (!existingTargetOption) {
+                    elNewLimitTarget.appendChild(elTargetOption);
+                }
             }
 
             addLimitOption('---', "");
@@ -191,6 +208,20 @@
                     tBodyActiveClients.innerHTML += `<tr><td>${clientName}</td><td>${clientIP}</td></tr>`;
                 }
             }
+
+            // remove old target names
+            existingLimitTargetNames.forEach((name) => {
+                if (newLimitTargetNames.has(name)) {
+                    return;
+                }
+                /**
+                 * @type {HTMLElement}
+                 */
+                const el = [...elNewLimitTarget.querySelectorAll('option')].find((ch) => ch?.innerText === name);
+                if (el) {
+                    el.parentElement.removeChild(el);
+                }
+            });
         }
 
         getClients().then(() => getActiveLimits());
