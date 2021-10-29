@@ -227,7 +227,9 @@ def get_clients() -> CachedRequestActiveClientsCache:
     conn.disconnect()
     r: List[Tuple[str, Optional[str], bool]] = []
     for client in res:
-        if client.get('address', '') == '10.1.1.1':
+        if client.get('address', '') == ROUTER_ADDRESS:
+            continue
+        if client.get('disabled', 'false') == 'true':
             continue
         r.append((client.get('address'), client.get('comment'), client.get('status', '') == 'bound'))
     return r
@@ -277,7 +279,7 @@ def verify_password(username: str, password: str):
 @app.route('/')
 @auth.login_required
 def web_root() -> str:
-    return render_template('index.html')
+    return render_template('index.html', router_address=ROUTER_ADDRESS)
 
 
 @app.route('/api/clients')
