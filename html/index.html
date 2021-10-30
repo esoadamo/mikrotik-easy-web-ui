@@ -152,6 +152,17 @@
         const tBodyActiveClients = document.getElementById('active-clients');
         const getClients = async () => {
             const data = await httpGet('api/clients');
+            // sort clients by name
+            data.sort((a, b) => {
+                const aName = a[1];
+                const bName = b[1];
+                if (aName === bName) {
+                    return 0;
+                }
+                const names = [aName, bName];
+                names.sort();
+                return names[0] === aName ? -1 : 1;
+            });
             const newLimitTargetValue = elNewLimitTarget.querySelector('.selected')?.value;
             tBodyActiveClients.innerHTML = '';
 
