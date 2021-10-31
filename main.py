@@ -352,7 +352,7 @@ def api_new_limit() -> Response:
 
     limit_add(f"_{target}_{ttl}", target, upload, download)
 
-    return redirect(url_for('web_root'))
+    return redirect(request.referrer if request.referrer else url_for('web_root'))
 
 
 @app.route('/api/limit-remove', methods=['POST'])
@@ -361,7 +361,7 @@ def api_limit_remove() -> Response:
     name = request.form.get('name')
     assert name
     limit_remove(name)
-    return redirect(url_for('web_root'))
+    return redirect(request.referrer if request.referrer else url_for('web_root'))
 
 
 @app.route('/api/limits')
