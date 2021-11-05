@@ -139,7 +139,8 @@
                 let untilStr = 'Never';
                 if (until !== null) {
                     const date = new Date(until * 1000);
-                    untilStr = `${date.getDate()}/${date.getMonth()} ${date.getHours()}:${date.getMinutes()}`;
+                    const z = (x) => x < 10 ? `0${x}` : x;
+                    untilStr = `${z(date.getDate())}/${z(date.getMonth() + 1)} ${z(date.getHours())}:${z(date.getMinutes())}`;
                 }
                 const friendlyName = (target === "EVERYONE" ? "Everyone" : clientsCache[target]) || target;
 
