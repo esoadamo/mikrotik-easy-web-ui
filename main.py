@@ -63,7 +63,8 @@ ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
 WEB_PORT = os.getenv('WEB_UI_PORT')
 DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
-DNS_TRUSTED_SERVERS = os.getenv('TRUSTED_DNS_SERVERS')
+DNS_TRUSTED_SERVERS = os.getenv('DNS_TRUSTED_SERVERS')
+DNS_FALLBACK_SERVERS = os.getenv('DNS_FALLBACK_SERVERS')
 FILE_ROUTER_LOG = Path(os.getenv('ROUTER_LOG')) if os.getenv('ROUTER_LOG') is not None else None
 LOCK_ROUTER_LOG = Lock()
 FILE_SELF_LOG = Path(os.getenv('LOG')) if os.getenv('LOG') is not None else None
@@ -139,7 +140,7 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
     else:
         api.get_resource('/ip/dns').call('set', arguments={
             'use-doh-server': '',
-            'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8' if DNS_TRUSTED_SERVERS is None else DNS_TRUSTED_SERVERS
+            'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8' if DNS_FALLBACK_SERVERS is None else DNS_FALLBACK_SERVERS
         })
     conn.disconnect()
 
@@ -444,9 +445,6 @@ def thread_notif_logged_errors() -> None:
             if 'error' not in topics:
                 continue
             if 'DoH server connection error: ' in rec_message:
-                # disable DoH until it works again
-                log("[DoH]", f"error in log - {rec_message}")
-                set_doh_enabled(False, 5 * 60 + randint(0, 120))
                 continue
 
             message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
