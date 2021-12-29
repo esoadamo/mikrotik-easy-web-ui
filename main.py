@@ -72,6 +72,7 @@ DNS_MONITOR_DOMAINS_FILE = os.getenv('DNS_MONITOR_DOMAINS_FILE')
 UI_USER: Optional[str] = os.getenv('UI_USER')
 UI_PASSWORD: Optional[str] = os.getenv('UI_PASSWORD')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
+FILE_ARP_WATCH_DB = os.getenv('ARP_WATCH_DB')
 
 
 def rt(data: any) -> Response:
@@ -246,7 +247,7 @@ def get_arp_clients() -> Dict[str, str]:
     conn.disconnect()
     r: Dict[str, str] = {}
     for client in response_arp:
-        r[client['mac-address']] = client['address']
+        r[client['mac-address'].upper()] = client['address'].lower()
     return r
 
 
@@ -263,10 +264,10 @@ def get_clients() -> CachedRequestActiveClientsCache:
         if client.get('disabled', 'false') == 'true':
             continue
 
-        client_address: str = client.get('address')
+        client_address: str = client.get('address', '').lower()
         client_name: Optional[str] = client.get('comment')
-        client_saved_mac = client.get('mac-address')
-        client_active_mac: str = client.get('active-mac-address')
+        client_saved_mac = client.get('mac-address', '').upper()
+        client_active_mac: str = client.get('active-mac-address', '').upper()
         client_active: bool = (
                 client.get('status', '') == 'bound'
                 or client_active_mac in arp_clients
@@ -597,6 +598,29 @@ def thread_monitor_dns() -> None:
         sleep(5 * 60 + randint(0, 280))
 
 
+@retry_on_error
+def thread_arp_watch() -> None:
+    # mac: first_seen
+    arp_db: Dict[str, int] = {}
+
+    if os.path.isfile(FILE_ARP_WATCH_DB):
+        with open(FILE_ARP_WATCH_DB, 'r') as f:
+            arp_db.update(json.load(f))
+
+    while True:
+        changed = False
+        for mac, ip in get_arp_clients().items():
+            if mac in arp_db:
+                continue
+            changed = True
+            arp_db[mac] = int(time())
+            log(f"[ARP WATCH] New device connected with MAC '{mac}' as '{ip}'")
+        if changed:
+            with open(FILE_ARP_WATCH_DB, 'w') as f:
+                json.dump(arp_db, f, indent=1)
+        sleep(5 * 60 + randint(0, 280))
+
+
 def main() -> int:
     log("[MAIN] starting up")
     if not get_login_credentials():
@@ -615,6 +639,8 @@ def main() -> int:
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
+    if FILE_ARP_WATCH_DB is not None:
+        Thread(target=thread_arp_watch, daemon=True).start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
     http_server = WSGIServer(('127.0.0.1', int(WEB_PORT)), app)
     try:
