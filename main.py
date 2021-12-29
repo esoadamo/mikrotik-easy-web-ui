@@ -73,6 +73,7 @@ UI_USER: Optional[str] = os.getenv('UI_USER')
 UI_PASSWORD: Optional[str] = os.getenv('UI_PASSWORD')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 FILE_ARP_WATCH_DB = os.getenv('ARP_WATCH_DB')
+ARP_WATCH_INTERFACE = os.getenv('ARP_WATCH_INTERFACE')
 
 
 def rt(data: any) -> Response:
@@ -247,6 +248,12 @@ def get_arp_clients() -> Dict[str, str]:
     conn.disconnect()
     r: Dict[str, str] = {}
     for client in response_arp:
+        if ARP_WATCH_INTERFACE is not None and client.get('interface') != ARP_WATCH_INTERFACE:
+            continue
+        if 'mac-address' not in client:
+            continue
+        if 'address' not in client:
+            continue
         r[client['mac-address'].upper()] = client['address'].lower()
     return r
 
