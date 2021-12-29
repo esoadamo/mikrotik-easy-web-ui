@@ -29,7 +29,7 @@ except ImportError:
 
 load_dotenv()
 
-CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool]]
+CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool, str]]
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
 RequestLimits = List[Tuple[str, str, float, float, Optional[int]]]
 
@@ -240,17 +240,68 @@ def get_sniffer_running() -> bool:
 
 
 @retry_on_error
+def get_arp_clients() -> Dict[str, str]:
+    api, conn = get_api()
+    response_arp = api.get_resource('/ip/arp').get()
+    conn.disconnect()
+    r: Dict[str, str] = {}
+    for client in response_arp:
+        r[client['mac-address']] = client['address']
+    return r
+
+
+@retry_on_error
 def get_clients() -> CachedRequestActiveClientsCache:
     api, conn = get_api()
-    res = api.get_resource('/ip/dhcp-server/lease').get()
+    response_leases = api.get_resource('/ip/dhcp-server/lease').get()
     conn.disconnect()
-    r: List[Tuple[str, Optional[str], bool]] = []
-    for client in res:
+    arp_clients = get_arp_clients()
+    r: CachedRequestActiveClientsCache = []
+    for client in response_leases:
         if client.get('address', '') == ROUTER_ADDRESS:
             continue
         if client.get('disabled', 'false') == 'true':
             continue
-        r.append((client.get('address'), client.get('comment'), client.get('status', '') == 'bound'))
+
+        client_address: str = client.get('address')
+        client_name: Optional[str] = client.get('comment')
+        client_saved_mac = client.get('mac-address')
+        client_active_mac: str = client.get('active-mac-address')
+        client_active: bool = (
+                client.get('status', '') == 'bound'
+                or client_active_mac in arp_clients
+                or client_saved_mac in arp_clients
+                )
+        client_imposter = (
+                client_name
+                and client_active
+                and client_saved_mac != client_active_mac
+                and (client_saved_mac not in arp_clients or arp_clients[client_saved_mac] != client_address)
+        )
+
+        if client_imposter:
+            client_name += ' (IMPOSTER)'
+
+        r.append((
+            client_address,
+            client_name,
+            client_active,
+            client_active_mac
+        ))
+
+        if client_active_mac in arp_clients:
+            del arp_clients[client_active_mac]
+        if client_saved_mac in arp_clients:
+            del arp_clients[client_saved_mac]
+
+    for arp_mac, arp_ip in arp_clients.items():
+        r.append((
+            arp_ip,
+            None,
+            True,
+            arp_mac
+        ))
+
     return r
 
 
@@ -565,7 +616,7 @@ def main() -> int:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
-    http_server = WSGIServer(('', int(WEB_PORT)), app)
+    http_server = WSGIServer(('127.0.0.1', int(WEB_PORT)), app)
     try:
         http_server.serve_forever()
     except KeyboardInterrupt:
