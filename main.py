@@ -574,7 +574,12 @@ def thread_monitor_dns() -> None:
 
     filtered_bad_domains: Set[str] = set()
     with file_bad_domains.open('r') as f:
-        filtered_bad_domains.update(map(lambda x: x.strip(), f.readlines()))
+        filtered_bad_domains.update(
+            filter(
+                lambda x: not not x and not x.startswith('#'),
+                map(lambda x: x.strip(), f.readlines())
+            )
+        )
 
     seen_bad_domains_last: Set[str] = set()
 
