@@ -6,4 +6,4 @@ __pycache__/
 notification.py
 mock/
 bad-domains.txt
-
+__*
