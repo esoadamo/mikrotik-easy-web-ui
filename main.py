@@ -29,7 +29,10 @@ except ImportError:
 
 load_dotenv()
 
-CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool, str]]
+# active IP, saved name, is active?, active mac, saved mac
+CachedRequestActiveClientsCache = List[Tuple[str, Optional[str], bool, str, Optional[str]]]
+
+# IP, down, up
 CachedRequestNetUsageByIPCache = Dict[str, Tuple[int, int]]
 RequestLimits = List[Tuple[str, str, float, float, Optional[int]]]
 
@@ -294,7 +297,8 @@ def get_clients() -> CachedRequestActiveClientsCache:
             client_address,
             client_name,
             client_active,
-            client_active_mac
+            client_active_mac,
+            client_saved_mac
         ))
 
         if client_active_mac in arp_clients:
@@ -307,7 +311,8 @@ def get_clients() -> CachedRequestActiveClientsCache:
             arp_ip,
             None,
             True,
-            arp_mac
+            arp_mac,
+            None
         ))
 
     return r
@@ -382,6 +387,22 @@ def api_clients() -> Response:
         Thread(target=job, daemon=True).start()
 
     return rt(entry.cache)
+
+
+@app.route('/api/clients/all')
+@auth.login_required
+def api_clients_all() -> Response:
+    r: CachedRequestActiveClientsCache = get_clients()
+    if FILE_ARP_WATCH_DB is not None and os.path.isfile(FILE_ARP_WATCH_DB):
+        with open(FILE_ARP_WATCH_DB, 'r') as f:
+            ever_seen: Dict[str, str] = json.load(f)
+        for mac in ever_seen.keys():
+            for client in r:
+                if client[3] == mac or client[4] == mac:
+                    break
+            else:
+                r.append(('', None, False, '', mac))
+    return rt(r)
 
 
 @app.route('/api/net-usage-by-ip')
