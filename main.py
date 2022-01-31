@@ -136,13 +136,16 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
     :return: None
     """
     api, conn = get_api()
-    if enabled:
+
+    curr_is_enabled = api.get_resource('/ip/dns').get()[0].get('use-doh-server', '') == DoH_SERVER
+
+    if not curr_is_enabled and enabled:
         api.get_resource('/ip/dns').call('set', arguments={
             'use-doh-server': DoH_SERVER,
             'verify-doh-cert': 'yes',
             'servers': '' if DNS_TRUSTED_SERVERS is None else DNS_TRUSTED_SERVERS
         })
-    else:
+    elif curr_is_enabled is not enabled:
         api.get_resource('/ip/dns').call('set', arguments={
             'use-doh-server': '',
             'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8' if DNS_FALLBACK_SERVERS is None else DNS_FALLBACK_SERVERS
@@ -154,7 +157,7 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
             sleep(reset_after)
             set_doh_enabled(not enabled)
 
-        Thread(target=reset).start()
+        Thread(target=reset, daemon=True).start()
 
 
 def limit_get_names() -> Iterable[str]:
@@ -525,6 +528,8 @@ def thread_notif_logged_errors() -> None:
             if 'error' not in topics:
                 continue
             if 'DoH server connection error: ' in rec_message:
+                log("[DNS]", "disabling DoH because of server failure")
+                set_doh_enabled(False, 120)
                 continue
 
             message = f"Router error {rec_id} @ {rec_time}: {rec_message}"
