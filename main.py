@@ -79,6 +79,7 @@ UI_PASSWORD: Optional[str] = os.getenv('UI_PASSWORD')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 FILE_ARP_WATCH_DB = os.getenv('ARP_WATCH_DB')
 ARP_WATCH_INTERFACE = os.getenv('ARP_WATCH_INTERFACE')
+ARP_AUTO_REMOVE_TIME = (60 * int(os.getenv('ARP_AUTO_REMOVE_TIME'))) if os.getenv('ARP_AUTO_REMOVE_TIME') is not None else None
 
 
 class API:
@@ -310,6 +311,21 @@ def get_arp_clients() -> Dict[str, str]:
             continue
         r[client['mac-address'].upper()] = client['address'].lower()
     return r
+
+
+def remove_arp_client(mac: str) -> None:
+    mac = mac.upper()
+
+    client_removed = True
+
+    while client_removed:
+        for client in API.call('/ip/arp').get():
+            if client.get('mac-address', '').upper() != mac:
+                continue
+            API.call('/ip/arp').remove(numbers=client['id'])
+            break
+        else:
+            client_removed = False
 
 
 @retry_on_error
@@ -678,24 +694,39 @@ def thread_monitor_dns() -> None:
 
 @retry_on_error
 def thread_arp_watch() -> None:
-    # mac: first_seen
-    arp_db: Dict[str, int] = {}
+    # mac: discovered_time
+    arp_connected_clients: Dict[str, int] = {}
 
-    if os.path.isfile(FILE_ARP_WATCH_DB):
+    known_mac_addresses: Set[str] = set()
+
+    if FILE_ARP_WATCH_DB is not None and os.path.isfile(FILE_ARP_WATCH_DB):
         with open(FILE_ARP_WATCH_DB, 'r') as f:
-            arp_db.update(json.load(f))
+            known_mac_addresses.update(map(lambda x: x.upper(), json.load(f)))
 
     while True:
-        changed = False
+        new_unknown_device = False
         for mac, ip in get_arp_clients().items():
-            if mac in arp_db:
+            if mac in arp_connected_clients:
                 continue
-            changed = True
-            arp_db[mac] = int(time())
-            log(f"[ARP WATCH] New device connected with MAC '{mac}' as '{ip}'")
-        if changed:
+            arp_connected_clients[mac] = int(time())
+
+            if FILE_ARP_WATCH_DB and mac not in known_mac_addresses:
+                new_unknown_device = True
+                log(f"[ARP WATCH] New device connected with MAC '{mac}' as '{ip}'")
+
+        if ARP_AUTO_REMOVE_TIME is not None:
+            removed_macs: Set[str] = set()
+            for mac, connected_time in arp_connected_clients.items():
+                if time() - connected_time < ARP_AUTO_REMOVE_TIME:
+                    continue
+                removed_macs.add(mac)
+                remove_arp_client(mac)
+            for mac in removed_macs:
+                del arp_connected_clients[mac]
+
+        if FILE_ARP_WATCH_DB is not None and new_unknown_device:
             with open(FILE_ARP_WATCH_DB, 'w') as f:
-                json.dump(arp_db, f, indent=1)
+                json.dump(list(known_mac_addresses), f, indent=1)
         sleep(5 * 60 + randint(0, 280))
 
 
@@ -718,7 +749,7 @@ def main() -> int:
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
-    if FILE_ARP_WATCH_DB is not None:
+    if FILE_ARP_WATCH_DB is not None or ARP_AUTO_REMOVE_TIME is not None:
         Thread(target=thread_arp_watch, daemon=True).start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
     http_server = WSGIServer(('127.0.0.1', int(WEB_PORT)), app)
