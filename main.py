@@ -316,16 +316,10 @@ def get_arp_clients() -> Dict[str, str]:
 def remove_arp_client(mac: str) -> None:
     mac = mac.upper()
 
-    client_removed = True
-
-    while client_removed:
-        for client in API.call('/ip/arp').get():
-            if client.get('mac-address', '').upper() != mac:
-                continue
-            API.call('/ip/arp').remove(numbers=client['id'])
-            break
-        else:
-            client_removed = False
+    for client in reversed(API.call('/ip/arp').get()):
+        if client.get('mac-address', '').upper() != mac:
+            continue
+        API.call('/ip/arp').remove(numbers=client['id'])
 
 
 @retry_on_error
