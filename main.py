@@ -276,7 +276,7 @@ def log(*args) -> None:
     line = line.replace('\n', '\n' + line_offset)
 
     line = f"{date}: {line}"
-    print(line)
+    print(line, flush=True)
     SELF_LOG_QUEUE.put(line)
 
 
