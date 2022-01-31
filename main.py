@@ -662,7 +662,7 @@ def thread_monitor_dns() -> None:
         filtered_bad_domains.update(
             filter(
                 lambda x: not not x and not x.startswith('#'),
-                map(lambda x: x.strip(), f.readlines())
+                map(lambda x: x.strip().lower(), f.readlines())
             )
         )
 
@@ -672,10 +672,11 @@ def thread_monitor_dns() -> None:
         cache = API.call('/ip/dns/cache').get()
         seen_bad_domains_now: Set[str] = set()
         for record in cache:
-            name: str = record['name']
-            data: str = record['data']
+            name: Optional[str] = record.get('name')
+            data: Optional[str] = record.get('data')
+
             for bad_domain in filtered_bad_domains:
-                if bad_domain in name or bad_domain in data:
+                if (name is not None and bad_domain in name.lower()) or (data is not None and bad_domain in data.lower()):
                     seen_bad_domains_now.add(bad_domain)
                     if bad_domain in seen_bad_domains_last:
                         continue
