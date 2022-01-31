@@ -458,8 +458,8 @@ def api_clients_all() -> Response:
     r: CachedRequestActiveClientsCache = get_clients()
     if FILE_ARP_WATCH_DB is not None and os.path.isfile(FILE_ARP_WATCH_DB):
         with open(FILE_ARP_WATCH_DB, 'r') as f:
-            ever_seen: Dict[str, str] = json.load(f)
-        for mac in ever_seen.keys():
+            ever_seen: List[str] = json.load(f)
+        for mac in ever_seen:
             for client in r:
                 if client[3] == mac or client[4] == mac:
                     break
