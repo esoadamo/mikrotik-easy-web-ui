@@ -9,18 +9,20 @@ from pathlib import Path
 from queue import Queue
 from random import randint
 from subprocess import call, PIPE
-from threading import Thread, Lock
+from threading import Thread, Lock, get_ident
 from time import sleep
 from time import time
 from types import SimpleNamespace
-from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable, TypedDict
 from uuid import uuid4 as uuid
 from dotenv import load_dotenv
 from flask import Flask, Response, render_template, redirect, url_for, request
+from routeros_api.exceptions import RouterOsApiError
 from routeros_api import RouterOsApiPool
 from routeros_api.api import RouterOsApi
 from gevent.pywsgi import WSGIServer
 from flask_httpauth import HTTPBasicAuth
+from routeros_api.resource import RouterOsResource
 
 try:
     import notification as notification_module
@@ -79,27 +81,91 @@ FILE_ARP_WATCH_DB = os.getenv('ARP_WATCH_DB')
 ARP_WATCH_INTERFACE = os.getenv('ARP_WATCH_INTERFACE')
 
 
+class API:
+    class CacheContent(TypedDict):
+        last_heartbeat_check: int
+        api: RouterOsApi
+        conn: RouterOsApiPool
+        lock: Lock
+
+    __thread_cache: Dict[int, CacheContent] = {}
+    __cache_lock = Lock()
+
+    @classmethod
+    def is_ready(cls) -> bool:
+        return cls.__get_login_credentials() is not None
+
+    @staticmethod
+    def __get_login_credentials() -> Optional[Tuple[str, str]]:
+        username = os.getenv('ROUTER_USER')
+        password = os.getenv('ROUTER_PASSWORD')
+        if not username or not password:
+            return None
+        return username, password
+
+    @classmethod
+    def __create_new_connection(cls) -> Tuple[RouterOsApi, RouterOsApiPool]:
+        username, password = cls.__get_login_credentials()
+        conn = RouterOsApiPool(ROUTER_ADDRESS,
+                               username=username,
+                               password=password,
+                               use_ssl=True,
+                               ssl_verify=False,
+                               plaintext_login=True)
+        return conn.get_api(), conn
+
+    @classmethod
+    def watchdog(cls) -> None:
+        while True:
+            sleep(300)
+            with cls.__cache_lock:
+                old_sessions: Set[int] = set()
+                for session_id, data in cls.__thread_cache.items():
+                    if time() - data['last_heartbeat_check'] > 11 * 60:
+                        old_sessions.add(session_id)
+                for session_id in old_sessions:
+                    try:
+                        cls.__thread_cache[session_id]['conn'].disconnect()
+                    except RouterOsApiError:
+                        pass
+                    del cls.__thread_cache[session_id]
+
+    @classmethod
+    def __get(cls) -> Tuple[RouterOsApi, Lock]:
+        thread_id = get_ident()
+        with cls.__cache_lock:
+            if thread_id in cls.__thread_cache:
+                if time() - cls.__thread_cache[thread_id]['last_heartbeat_check'] > 2 * 60:
+                    cls.__thread_cache[thread_id]['last_heartbeat_check'] = int(time())
+                    try:
+                        api, conn = cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['conn']
+                        api.get_resource('/system/resource').get()
+                    except RouterOsApiError:
+                        try:
+                            conn.disconnect()
+                        except RouterOsApiError:
+                            pass
+                        del cls.__thread_cache[thread_id]
+            if thread_id not in cls.__thread_cache:
+                api, conn = cls.__create_new_connection()
+                cls.__thread_cache[thread_id] = {
+                    'api': api,
+                    'conn': conn,
+                    'last_heartbeat_check': time(),
+                    'lock': Lock()
+                }
+
+            return cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['lock']
+        
+    @classmethod
+    def call(cls, path: str) -> RouterOsResource:
+        api, lock = cls.__get()
+        with lock:
+            return api.get_resource(path)
+
+
 def rt(data: any) -> Response:
     return Response(json.dumps(data), mimetype='application/json')
-
-
-def get_login_credentials() -> Optional[Tuple[str, str]]:
-    username = os.getenv('ROUTER_USER')
-    password = os.getenv('ROUTER_PASSWORD')
-    if not username or not password:
-        return None
-    return username, password
-
-
-def get_api() -> Tuple[RouterOsApi, RouterOsApiPool]:
-    username, password = get_login_credentials()
-    conn = RouterOsApiPool(ROUTER_ADDRESS,
-                           username=username,
-                           password=password,
-                           use_ssl=True,
-                           ssl_verify=False,
-                           plaintext_login=True)
-    return conn.get_api(), conn
 
 
 def retry_on_error(f: Callable) -> Callable:
@@ -135,22 +201,20 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
     :param reset_after: if not None, then opposite state is set after given seconds
     :return: None
     """
-    api, conn = get_api()
 
-    curr_is_enabled = api.get_resource('/ip/dns').get()[0].get('use-doh-server', '') == DoH_SERVER
+    curr_is_enabled = API.call('/ip/dns').get()[0].get('use-doh-server', '') == DoH_SERVER
 
     if not curr_is_enabled and enabled:
-        api.get_resource('/ip/dns').call('set', arguments={
+        API.call('/ip/dns').call('set', arguments={
             'use-doh-server': DoH_SERVER,
             'verify-doh-cert': 'yes',
             'servers': '' if DNS_TRUSTED_SERVERS is None else DNS_TRUSTED_SERVERS
         })
     elif curr_is_enabled is not enabled:
-        api.get_resource('/ip/dns').call('set', arguments={
+        API.call('/ip/dns').call('set', arguments={
             'use-doh-server': '',
             'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8' if DNS_FALLBACK_SERVERS is None else DNS_FALLBACK_SERVERS
         })
-    conn.disconnect()
 
     if reset_after is not None:
         def reset() -> None:
@@ -161,18 +225,14 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
 
 
 def limit_get_names() -> Iterable[str]:
-    api, conn = get_api()
-    r = map(lambda x: x['name'], api.get_resource('/queue/simple').get())
-    conn.disconnect()
+    r = map(lambda x: x['name'], API.call('/queue/simple').get())
     return r
 
 
 def limit_remove(name: str) -> None:
-    api, conn = get_api()
-    limits = api.get_resource('/queue/simple')
+    limits = API.call('/queue/simple')
     limit_id = limits.get(name=name)[0]['id']
     limits.remove(id=limit_id)
-    conn.disconnect()
 
 
 def limit_add(name: str, target: str, upload: float, download: float) -> None:
@@ -187,19 +247,16 @@ def limit_add(name: str, target: str, upload: float, download: float) -> None:
         if existing_limit_name == name or existing_limit_name.startswith(f"_{target}"):
             limit_remove(existing_limit_name)
             break
-    api, conn = get_api()
-    api.get_resource('/queue/simple').call('add', arguments={
+    API.call('/queue/simple').call('add', arguments={
         'name': name,
         'target': f"{target}/32" if target != "EVERYONE" else LOCAL_NETWORK,
         'max-limit': "%.2fM/%.2fM" % (upload * 8, download * 8)
     })
-    conn.disconnect()
 
 
 def limits_fetch() -> RequestLimits:
-    api, conn = get_api()
     r: RequestLimits = []
-    for limit in api.get_resource('/queue/simple').get():
+    for limit in API.call('/queue/simple').get():
         name: str = limit.get('name')
         if not name.startswith('_'):
             continue
@@ -207,7 +264,6 @@ def limits_fetch() -> RequestLimits:
         upload, download = limit.get('max-limit').split('/')
         timeout = int(timeout) if timeout != 'EVER' else None
         r.append((name, str(target), int(download) / 8000000, int(upload) / 8000000, timeout))
-    conn.disconnect()
     return r
 
 
@@ -225,33 +281,25 @@ def log(*args) -> None:
 
 @retry_on_error
 def get_updates_available() -> bool:
-    api, conn = get_api()
-    res = api.get_resource('/system/package/update').call('check-for-updates')
-    conn.disconnect()
+    res = API.call('/system/package/update').call('check-for-updates')
     return 'available' in res[-1]['status'].lower()
 
 
 @retry_on_error
 def get_log() -> List[Dict[str, str]]:
-    api, conn = get_api()
-    res = api.get_resource('/log').get()
-    conn.disconnect()
+    res = API.call('/log').get()
     return res
 
 
 @retry_on_error
 def get_sniffer_running() -> bool:
-    api, conn = get_api()
-    r = api.get_resource('/tool/sniffer').get()[0]['running'] == 'true'
-    conn.disconnect()
+    r = API.call('/tool/sniffer').get()[0]['running'] == 'true'
     return r
 
 
 @retry_on_error
 def get_arp_clients() -> Dict[str, str]:
-    api, conn = get_api()
-    response_arp = api.get_resource('/ip/arp').get()
-    conn.disconnect()
+    response_arp = API.call('/ip/arp').get()
     r: Dict[str, str] = {}
     for client in response_arp:
         if ARP_WATCH_INTERFACE is not None and client.get('interface') != ARP_WATCH_INTERFACE:
@@ -266,9 +314,7 @@ def get_arp_clients() -> Dict[str, str]:
 
 @retry_on_error
 def get_clients() -> CachedRequestActiveClientsCache:
-    api, conn = get_api()
-    response_leases = api.get_resource('/ip/dhcp-server/lease').get()
-    conn.disconnect()
+    response_leases = API.call('/ip/dhcp-server/lease').get()
     arp_clients = get_arp_clients()
     r: CachedRequestActiveClientsCache = []
     for client in response_leases:
@@ -323,12 +369,10 @@ def get_clients() -> CachedRequestActiveClientsCache:
 
 @retry_on_error
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
-    api, conn = get_api()
     ip_speed: Dict[str, Tuple[int, int]] = {}
     if not get_sniffer_running():
-        api.get_resource('/tool/sniffer').call('start')
-    packets = api.get_resource('/tool/sniffer/host').get()
-    conn.disconnect()
+        API.call('/tool/sniffer').call('start')
+    packets = API.call('/tool/sniffer/host').get()
     for packet in packets:
         ip_from: str = packet.get('address', '')
         speed: Tuple[str, str] = tuple(packet.get('rate', '0/0').split('/'))
@@ -483,9 +527,7 @@ def thread_stop_sniffer() -> None:
     while True:
         if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
                 CACHE['net-usage-by-ip'].nextRequestTime - time() < -600 and get_sniffer_running():
-            api, conn = get_api()
-            api.get_resource('/tool/sniffer').call('stop')
-            conn.disconnect()
+            API.call('/tool/sniffer').call('stop')
         sleep((5 + randint(0, 10)) * 60)
 
 
@@ -617,8 +659,7 @@ def thread_monitor_dns() -> None:
     seen_bad_domains_last: Set[str] = set()
 
     while True:
-        api, conn = get_api()
-        cache = api.get_resource('/ip/dns/cache').get()
+        cache = API.call('/ip/dns/cache').get()
         seen_bad_domains_now: Set[str] = set()
         for record in cache:
             name: str = record['name']
@@ -631,7 +672,6 @@ def thread_monitor_dns() -> None:
                     message = f"[DNS MONITOR] Bad domain accessed '{name}' -> '{data}'"
                     log(message)
                     send_notification(message)
-        conn.disconnect()
         seen_bad_domains_last = seen_bad_domains_now
         sleep(5 * 60 + randint(0, 280))
 
@@ -661,12 +701,13 @@ def thread_arp_watch() -> None:
 
 def main() -> int:
     log("[MAIN] starting up")
-    if not get_login_credentials():
+    if not API.is_ready():
         log("[MAIN] Error: Login credentials are missing!")
         return 1
     if not WEB_PORT or not LOCAL_NETWORK or not ROUTER_ADDRESS:
         log("[MAIN] Error: Some required settings are missing")
         return 1
+    Thread(target=API.watchdog, daemon=True).start()
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
