@@ -117,12 +117,13 @@ class API:
 
     @classmethod
     def watchdog(cls) -> None:
+        session_ttl_minutes = 100
         while True:
-            sleep(300)
+            sleep(max(session_ttl_minutes / 3, 0.5) * 60)
             with cls.__cache_lock:
                 old_sessions: Set[int] = set()
                 for session_id, data in cls.__thread_cache.items():
-                    if time() - data['last_heartbeat_check'] > 11 * 60:
+                    if time() - data['last_heartbeat_check'] > session_ttl_minutes * 60:
                         old_sessions.add(session_id)
                 for session_id in old_sessions:
                     try:
