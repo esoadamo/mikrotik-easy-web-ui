@@ -1,7 +1,5 @@
 import json
-import re
 import os
-import requests
 import traceback
 from datetime import datetime
 from hashlib import md5
@@ -79,7 +77,10 @@ UI_PASSWORD: Optional[str] = os.getenv('UI_PASSWORD')
 SELF_LOG_QUEUE = Queue(maxsize=2048)
 FILE_ARP_WATCH_DB = os.getenv('ARP_WATCH_DB')
 ARP_WATCH_INTERFACE = os.getenv('ARP_WATCH_INTERFACE')
-ARP_AUTO_REMOVE_TIME = (60 * int(os.getenv('ARP_AUTO_REMOVE_TIME'))) if os.getenv('ARP_AUTO_REMOVE_TIME') is not None else None
+ARP_AUTO_REMOVE_TIME = (60 * int(os.getenv('ARP_AUTO_REMOVE_TIME'))) if os.getenv('ARP_AUTO_REMOVE_TIME')\
+                                                                        is not None else None
+CPU_NOTIFICATION_THRESHOLD = int(os.getenv('CPU_NOTIFICATION_THRESHOLD')) if os.getenv('CPU_NOTIFICATION_THRESHOLD') \
+                                                                             is not None else None
 
 
 class API:
@@ -613,15 +614,11 @@ def thread_test_dns() -> None:
 @retry_on_error
 def thread_check_cpu() -> None:
     while True:
-        # noinspection HttpUrlsUsage
-        html = requests.get(f'http://{ROUTER_ADDRESS}/graphs/cpu/', timeout=60).text
-        for r in re.finditer(r'Max:\s+[0-9]+%;\s+Average:\s+[0-9]+%;\s+Current:\s+([0-9]+)%', html, re.I):
-            current_usage = int(r.group(1))
-            if current_usage > 65:
-                msg = f"High router CPU usage ({current_usage}%)"
-                log("[CPU]", msg)
-                send_notification(msg)
-            break
+        cpu_load = float(API.call('/system/resource').get()[0]['cpu-load'])
+        if cpu_load > CPU_NOTIFICATION_THRESHOLD:
+            msg = f"High router CPU usage ({cpu_load}%)"
+            log("[CPU]", msg)
+            send_notification(msg)
         sleep(5 * 60 + randint(30, 50))
 
 
@@ -677,7 +674,8 @@ def thread_monitor_dns() -> None:
             data: Optional[str] = record.get('data')
 
             for bad_domain in filtered_bad_domains:
-                if (name is not None and bad_domain in name.lower()) or (data is not None and bad_domain in data.lower()):
+                if (name is not None and bad_domain in name.lower())\
+                        or (data is not None and bad_domain in data.lower()):
                     seen_bad_domains_now.add(bad_domain)
                     if bad_domain in seen_bad_domains_last:
                         continue
@@ -738,10 +736,11 @@ def main() -> int:
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
-    Thread(target=thread_check_cpu, daemon=True).start()
     Thread(target=thread_write_log, daemon=True).start()
     Thread(target=thread_remove_old_limits, daemon=True).start()
     Thread(target=thread_monitor_dns, daemon=True).start()
+    if CPU_NOTIFICATION_THRESHOLD is not None:
+        Thread(target=thread_check_cpu, daemon=True).start()
     if DoH_SERVER is not None:
         set_doh_enabled(True)
         Thread(target=thread_test_dns, daemon=True).start()
