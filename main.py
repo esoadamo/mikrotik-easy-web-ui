@@ -7,20 +7,17 @@ from pathlib import Path
 from queue import Queue
 from random import randint
 from subprocess import call, PIPE
-from threading import Thread, Lock, get_ident
+from threading import Thread, Lock
 from time import sleep
 from time import time
 from types import SimpleNamespace
-from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable, TypedDict
+from typing import List, Tuple, Optional, Dict, Union, Callable, Any, Set, Iterable
 from uuid import uuid4 as uuid
 from dotenv import load_dotenv
 from flask import Flask, Response, render_template, redirect, url_for, request
-from routeros_api.exceptions import RouterOsApiError
-from routeros_api import RouterOsApiPool
-from routeros_api.api import RouterOsApi
 from gevent.pywsgi import WSGIServer
 from flask_httpauth import HTTPBasicAuth
-from routeros_api.resource import RouterOsResource
+from router_api import API
 
 try:
     import notification as notification_module
@@ -62,7 +59,6 @@ CACHE: Dict[str, CachedRequest] = {
 app = Flask(__name__, static_folder='static', template_folder='html')
 auth = HTTPBasicAuth()
 
-ROUTER_ADDRESS = os.getenv('ROUTER_ADDRESS')
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
 WEB_PORT = os.getenv('WEB_UI_PORT')
 DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
@@ -81,90 +77,6 @@ ARP_AUTO_REMOVE_TIME = (60 * int(os.getenv('ARP_AUTO_REMOVE_TIME'))) if os.geten
                                                                         is not None else None
 CPU_NOTIFICATION_THRESHOLD = int(os.getenv('CPU_NOTIFICATION_THRESHOLD')) if os.getenv('CPU_NOTIFICATION_THRESHOLD') \
                                                                              is not None else None
-
-
-class API:
-    class CacheContent(TypedDict):
-        last_heartbeat_check: int
-        api: RouterOsApi
-        conn: RouterOsApiPool
-        lock: Lock
-
-    __thread_cache: Dict[int, CacheContent] = {}
-    __cache_lock = Lock()
-
-    @classmethod
-    def is_ready(cls) -> bool:
-        return cls.__get_login_credentials() is not None
-
-    @staticmethod
-    def __get_login_credentials() -> Optional[Tuple[str, str]]:
-        username = os.getenv('ROUTER_USER')
-        password = os.getenv('ROUTER_PASSWORD')
-        if not username or not password:
-            return None
-        return username, password
-
-    @classmethod
-    def __create_new_connection(cls) -> Tuple[RouterOsApi, RouterOsApiPool]:
-        username, password = cls.__get_login_credentials()
-        conn = RouterOsApiPool(ROUTER_ADDRESS,
-                               username=username,
-                               password=password,
-                               use_ssl=True,
-                               ssl_verify=False,
-                               plaintext_login=True)
-        return conn.get_api(), conn
-
-    @classmethod
-    def watchdog(cls) -> None:
-        session_ttl_minutes = 100
-        while True:
-            sleep(max(session_ttl_minutes / 3, 0.5) * 60)
-            with cls.__cache_lock:
-                old_sessions: Set[int] = set()
-                for session_id, data in cls.__thread_cache.items():
-                    if time() - data['last_heartbeat_check'] > session_ttl_minutes * 60:
-                        old_sessions.add(session_id)
-                for session_id in old_sessions:
-                    try:
-                        cls.__thread_cache[session_id]['conn'].disconnect()
-                    except RouterOsApiError:
-                        pass
-                    del cls.__thread_cache[session_id]
-
-    @classmethod
-    def __get(cls) -> Tuple[RouterOsApi, Lock]:
-        thread_id = get_ident()
-        with cls.__cache_lock:
-            if thread_id in cls.__thread_cache:
-                if time() - cls.__thread_cache[thread_id]['last_heartbeat_check'] > 2 * 60:
-                    cls.__thread_cache[thread_id]['last_heartbeat_check'] = int(time())
-                    try:
-                        api, conn = cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['conn']
-                        api.get_resource('/system/resource').get()
-                    except RouterOsApiError:
-                        try:
-                            conn.disconnect()
-                        except RouterOsApiError:
-                            pass
-                        del cls.__thread_cache[thread_id]
-            if thread_id not in cls.__thread_cache:
-                api, conn = cls.__create_new_connection()
-                cls.__thread_cache[thread_id] = {
-                    'api': api,
-                    'conn': conn,
-                    'last_heartbeat_check': time(),
-                    'lock': Lock()
-                }
-
-            return cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['lock']
-        
-    @classmethod
-    def call(cls, path: str) -> RouterOsResource:
-        api, lock = cls.__get()
-        with lock:
-            return api.get_resource(path)
 
 
 def rt(data: any) -> Response:
@@ -330,7 +242,7 @@ def get_clients() -> CachedRequestActiveClientsCache:
     arp_clients = get_arp_clients()
     r: CachedRequestActiveClientsCache = []
     for client in response_leases:
-        if client.get('address', '') == ROUTER_ADDRESS:
+        if client.get('address', '') == API.get_address():
             continue
         if client.get('disabled', 'false') == 'true':
             continue
@@ -395,7 +307,7 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
             continue
         ip_speed[ip_from] = (speed_down, speed_up)
 
-    router_ip = ROUTER_ADDRESS
+    router_ip = API.get_address()
     server_ip = os.getenv('LOCAL_ADDRESS')
     if router_ip in ip_speed and server_ip in ip_speed:
         router_down, router_up = ip_speed[router_ip]
@@ -421,7 +333,7 @@ def verify_password(username: str, password: str):
 @app.route('/')
 @auth.login_required
 def web_root() -> str:
-    return render_template('index.html', router_address=ROUTER_ADDRESS)
+    return render_template('index.html', router_address=API.get_address())
 
 
 @app.route('/api/clients')
@@ -729,7 +641,7 @@ def main() -> int:
     if not API.is_ready():
         log("[MAIN] Error: Login credentials are missing!")
         return 1
-    if not WEB_PORT or not LOCAL_NETWORK or not ROUTER_ADDRESS:
+    if not WEB_PORT or not LOCAL_NETWORK or not API.get_address():
         log("[MAIN] Error: Some required settings are missing")
         return 1
     Thread(target=API.watchdog, daemon=True).start()
