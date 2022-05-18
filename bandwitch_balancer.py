@@ -1,5 +1,5 @@
 from threading import Thread
-from time import sleep
+from time import sleep, time
 from collections import deque
 from typing import Iterator, Set, Tuple, NamedTuple, List, Optional, Dict, TypeVar, Generic
 
@@ -13,7 +13,7 @@ T = TypeVar('T')
 
 
 class Limit(NamedTuple):
-    id: str
+    id: Optional[str]
     ip: int
     rate: int
     max_rate: int
@@ -50,11 +50,15 @@ class Balancer(Thread):
         self.__min_bandwitch = min_bandwitch
         self.__threshold = threshold / 100
         self.__ip_prefix = ip_prefix
+        self.__name_prefix = f"balancer_{self.__ip_prefix}"
         self.__api: API = api
         self.__get_queues_history: DictAverage[int] = DictAverage(n=2)
 
+        self.__mark_cache: Dict[int, int] = {}
+        self.__mark_cache_time: int = 0
+
         self.__init_marks()
-        # self.__init_queues()
+        self.__init_queues()
 
     def __init_marks(self) -> None:
         existing_marks: Set[str] = set(map(
@@ -80,29 +84,43 @@ class Balancer(Thread):
 
     def __init_queues(self) -> None:
         queues = list(self.__get_queues(include_root=True))
-        existing_ips: List[int] = list(map(lambda x: x.ip, queues))
-        for i in range(255):
-            ip, mark_name = self.__ip_mark_name(i)
-            _, parent_name = self.__ip_mark_name(0)
-            if i == 0:
-                parent_name = 'bridge'
+        self.__create_queue(0, queues)
+        for i in range(1, 255):
+            self.__delete_queue(i, queues)
 
-            if i not in existing_ips:
-                self.__api.call('queue/tree').call('add', arguments={
-                    'name': mark_name,
-                    'max-limit': '999M',
-                    'limit-at': '999M',
-                    'packet-mark': mark_name,
-                    'parent': parent_name
-                })
+    def __create_queue(self, ip: int, queues: Optional[Iterator[Limit]] = None, limit_at: Optional[int] = None, max_limit: Optional[int] = None) -> None:
+        queues = list(queues if queues else self.__get_queues(include_root=True))
+        existing_ips: Set[int] = set(map(lambda x: x.ip, queues))
 
-            if i != 0:
-                self.__set_limit(i, self.__max_bandwitch, queues)
+        ip_full, mark_name = self.__ip_mark_name(ip)
+        _, parent_name = self.__ip_mark_name(0)
+        if ip == 0:
+            parent_name = 'bridge'
+
+        if ip not in existing_ips:
+            self.__api.call('queue/tree').call('add', arguments={
+                'name': mark_name,
+                'max-limit': '999M' if limit_at is None else str(limit_at),
+                'limit-at': '999M' if max_limit is None else str(max_limit),
+                'packet-mark': mark_name if ip != 0 else '',
+                'parent': parent_name
+            })
+
+    def __delete_queue(self, ip: int, queues: Optional[Iterator[Limit]] = None) -> None:
+        queues = list(queues if queues else self.__get_queues(include_root=True))
+        _, mark_name = self.__ip_mark_name(ip)
+
+        for q in queues:
+            if q.ip != ip:
+                continue
+            if q.id is None:
+                return
+            self.__api.call('queue/tree').remove(id=q.id)
+            return
 
     def __set_limit(self, ip: int, limit: int, queues: Optional[List[Limit]] = None) -> None:
         _, mark_name = self.__ip_mark_name(ip)
-        max_limit = str(limit)
-        limit_at = str(int(limit * self.__threshold))
+        limit_at = int(limit * self.__threshold)
 
         if queues is None:
             queue_data = self.__queue_data_to_limit(
@@ -115,7 +133,10 @@ class Balancer(Thread):
             return
 
         print(f"[NEW LIMIT] {ip=} limit={limit / (1024 ** 2)}")
-        self.__api.call('queue/tree').set(id=queue_data.id, max_limit=max_limit, limit_at=limit_at)
+        if queue_data.id is not None:
+            self.__api.call('queue/tree').set(id=queue_data.id, max_limit=str(limit), limit_at=str(limit_at))
+        else:
+            self.__create_queue(ip, queues, limit_at=limit_at, max_limit=limit)
 
     def __ip_mark_name(self, ip: int) -> Tuple[str, str]:
         return f"{self.__ip_prefix}.{ip}", f"balancer_{self.__ip_prefix}.{ip:03}"
@@ -129,18 +150,50 @@ class Balancer(Thread):
             max_rate=int(data['max-limit'])
         )
 
-    def __get_queues(self, include_root: bool = False) -> Iterator[Limit]:
-        queues = self.__api.call('queue/tree').call('print', arguments={'stats': ''})
-        return map(
+    def __get_queues(self, existing: Optional[Iterator[Limit]] = None, include_root: bool = False) -> Iterator[Limit]:
+        if existing is not None:
+            yield from list(existing)
+            return
+        print('... get')
+        time_start = time()
+        marks = list(filter(
+            lambda x: x.get('new-packet-mark', '').startswith(self.__name_prefix),
+            self.__api.call('ip/firewall/mangle').call('print', arguments={'stats': ''})
+        ))
+
+        queues_map = {x.ip: x for x in map(
             self.__queue_data_to_limit,
             filter(
-                lambda x: x['name'].startswith(f"balancer_{self.__ip_prefix}") and (include_root or not x['name'].endswith('.000')),
-                queues
+                lambda x: x['name'].startswith(self.__name_prefix) and (include_root or not x['name'].endswith('.000')),
+                self.__api.call('queue/tree').call('print', arguments={'stats': ''})
             )
-        )
+        )}
+
+        if include_root:
+            q_root = queues_map.get(0)
+            if q_root:
+                yield q_root
+
+        time_delta = time_start - self.__mark_cache_time
+        for m in marks:
+            ip = int(m['new-packet-mark'].rsplit('.', 1)[1])
+            m_bytes = int(m['bytes'])
+            if ip in queues_map:
+                yield queues_map[ip]
+            if ip in self.__mark_cache:
+                bytes_delta = m_bytes - self.__mark_cache[ip]
+                rate = int(8 * bytes_delta / time_delta)
+                yield Limit(
+                    id=None,
+                    ip=ip,
+                    rate=rate,
+                    max_rate=self.__max_bandwitch
+                )
+            self.__mark_cache[ip] = m_bytes
+        self.__mark_cache_time = time_start
 
     def __get_queue_root(self, queues: Optional[Iterator[Limit]] = None) -> Limit:
-        queues = list(queues if queues else self.__get_queues())
+        queues = self.__get_queues(queues)
 
         for q in queues:
             if q.ip == 0:
@@ -148,7 +201,7 @@ class Balancer(Thread):
         raise ValueError("Root queue not found")
 
     def __get_queues_limited(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
-        queues = list(queues if queues else self.__get_queues())
+        queues = self.__get_queues(queues)
 
         return filter(
             lambda x: x.max_rate < self.__max_bandwitch,
@@ -156,7 +209,7 @@ class Balancer(Thread):
         )
 
     def __get_queues_full(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
-        queues = list(queues if queues else self.__get_queues())
+        queues = self.__get_queues(queues)
 
         return filter(
             lambda x: x.rate > x.max_rate * self.__threshold,
@@ -164,15 +217,15 @@ class Balancer(Thread):
         )
 
     def __get_queues_used(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
-        queues = list(queues if queues else self.__get_queues())
+        queues = list(self.__get_queues(queues))
 
         return filter(
-            lambda x: x.rate > 0 and x.ip != 0,
+            lambda x: x.rate > 0,
             queues
         )
 
     def __get_queues_used_unlimited(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
-        queues = list(queues if queues else self.__get_queues())
+        queues = self.__get_queues(queues)
         queues_limited_ips: Set[int] = set(map(lambda x: x.ip, self.__get_queues_limited(queues)))
 
         return filter(
@@ -181,7 +234,7 @@ class Balancer(Thread):
         )
 
     def __get_queues_used_limited(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
-        queues = list(queues if queues else self.__get_queues())
+        queues = self.__get_queues(queues)
         queues_limited_ips: Set[int] = set(map(lambda x: x.ip, self.__get_queues_limited(queues)))
 
         return filter(
@@ -196,6 +249,10 @@ class Balancer(Thread):
             queues_used_limited = list(self.__get_queues_used_limited(queues))
             queues_limited = list(self.__get_queues_limited(queues))
             queues_limited_full = list(self.__get_queues_full(queues))
+
+            print(list(self.__get_queues_used(queues)))
+            print(f"{queues_used_limited=}")
+            print(f"{queues_used_unlimited=}")
 
             for q in queues:
                 if q.ip == 0:
@@ -215,9 +272,10 @@ class Balancer(Thread):
             else:
                 for q in queues_used_unlimited:
                     self.__set_limit(q.ip, self.__min_bandwitch, queues)
-                new_bandwitch = max(int(self.__max_bandwitch / len(queues_used_limited)), self.__min_bandwitch)
-                for q in queues_used_limited:
-                    self.__set_limit(q.ip, new_bandwitch, queues)
+                if queues_used_limited:
+                    new_bandwitch = max(int(self.__max_bandwitch / len(queues_used_limited)), self.__min_bandwitch)
+                    for q in queues_used_limited:
+                        self.__set_limit(q.ip, new_bandwitch, queues)
 
             sleep(5)
 
@@ -225,7 +283,7 @@ class Balancer(Thread):
 if __name__ == '__main__':
     def main() -> None:
         b = Balancer('10.1.1', 10 * (1024 ** 2), 3 * (1024 ** 2))
-        # b.start()
+        b.start()
 
 
     main()
