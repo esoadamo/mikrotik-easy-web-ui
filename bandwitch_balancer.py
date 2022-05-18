@@ -271,6 +271,7 @@ class Balancer(Thread):
 
             bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
             bandwitch_free = self.__max_bandwitch - bandwitch_used
+            threshold_free = self.__max_bandwitch * self.__threshold - bandwitch_used
             print()
             if queues_limited:
                 print('Limited:')
@@ -278,9 +279,9 @@ class Balancer(Thread):
             if queues_used_unlimited:
                 print('Unlimited:')
                 print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
-            print(f"Free: {bandwitch_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
+            print(f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, free threshold: {threshold_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
 
-            if bandwitch_free > 0:
+            if threshold_free > 0:
                 if queues_limited_full:
                     bandwitch_new = int((sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full))
                     for q in queues_limited_full:
