@@ -554,12 +554,12 @@ def thread_test_dns() -> None:
 @retry_on_error
 def thread_check_cpu() -> None:
     while True:
+        sleep(5 * 60 + randint(30, 50))
         cpu_load = float(API.call('/system/resource').get()[0]['cpu-load'])
         if cpu_load > CPU_NOTIFICATION_THRESHOLD:
             msg = f"High router CPU usage ({cpu_load}%)"
             log("[CPU]", msg)
             send_notification(msg)
-        sleep(5 * 60 + randint(30, 50))
 
 
 @retry_on_error
