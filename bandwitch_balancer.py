@@ -51,13 +51,15 @@ class DictAverage(Generic[T]):
 
 class Balancer(Thread):
     def __init__(self, ip_prefix: str, max_bandwitch: int, min_bandwitch: int, threshold: int = 95,
-                 api: API = API()) -> None:
-        super().__init__()
+                 api: API = API(), direction_upload: bool = False, suppress_output: bool = False) -> None:
+        super().__init__(daemon=True)
+        self.suppress_output = suppress_output
         self.__max_bandwitch = max_bandwitch - min_bandwitch
         self.__min_bandwitch = min_bandwitch
         self.__threshold = threshold / 100
         self.__ip_prefix = ip_prefix
-        self.__name_prefix = f"balancer_{self.__ip_prefix}"
+        self.__name_prefix = f"balancer_{'download' if not direction_upload else 'upload'}_{self.__ip_prefix}"
+        self.__direction_upload = direction_upload
         self.__api: API = api
         self.__queues_history: DictAverage[int] = DictAverage(n=3)
 
@@ -66,6 +68,9 @@ class Balancer(Thread):
 
         self.__init_marks()
         self.__init_queues()
+
+    def get_rates(self) -> Iterator[Tuple[int, int]]:
+        yield from self.__queues_history
 
     def __init_marks(self) -> None:
         existing_marks: Set[str] = set(map(
@@ -80,10 +85,12 @@ class Balancer(Thread):
             ip, mark_name = self.__ip_mark_name(i)
             if mark_name in existing_marks:
                 continue
+            addr_local = f'{ip}/32' if i != 0 else f'{ip}/24'
+            addr_lan = f'!{self.__ip_prefix}.0/24'
             self.__api.call('ip/firewall/mangle').call('add', arguments={
                 'chain': 'forward',
-                'dst-address': f'{ip}/32' if i != 0 else f'{ip}/24',
-                'src-address': f'!{self.__ip_prefix}.0/24',
+                'dst-address': addr_local if not self.__direction_upload else addr_lan,
+                'src-address': addr_lan if not self.__direction_upload else addr_local,
                 'action': 'mark-packet',
                 'new-packet-mark': mark_name,
                 'passthrough': 'no'
@@ -118,7 +125,7 @@ class Balancer(Thread):
         })
 
     def __delete_queue(self, ip: int, queues: Optional[Iterator[Limit]] = None) -> None:
-        queues = list(queues if queues else self.__get_queues(include_root=True))
+        queues = self.__get_queues(queues, include_root=True)
         _, mark_name = self.__ip_mark_name(ip)
 
         for q in queues:
@@ -152,7 +159,7 @@ class Balancer(Thread):
             self.__create_queue(ip, queues, limit_at=limit_at, max_limit=limit)
 
     def __ip_mark_name(self, ip: int) -> Tuple[str, str]:
-        return f"{self.__ip_prefix}.{ip}", f"balancer_{self.__ip_prefix}.{ip:03}"
+        return f"{self.__ip_prefix}.{ip}", f"{self.__name_prefix}.{ip:03}"
 
     @staticmethod
     def __queue_data_to_limit(data: dict) -> Limit:
@@ -272,14 +279,16 @@ class Balancer(Thread):
             bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
             bandwitch_free = self.__max_bandwitch - bandwitch_used
             threshold_free = self.__max_bandwitch * self.__threshold - bandwitch_used
-            print()
-            if queues_limited:
-                print('Limited:')
-                print('\n'.join(['- ' + str(x) for x in queues_limited]))
-            if queues_used_unlimited:
-                print('Unlimited:')
-                print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
-            print(f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, free threshold: {threshold_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
+            if not self.suppress_output:
+                print()
+                if queues_limited:
+                    print('Limited:')
+                    print('\n'.join(['- ' + str(x) for x in queues_limited]))
+                if queues_used_unlimited:
+                    print('Unlimited:')
+                    print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
+                print(
+                    f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, free threshold: {threshold_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
 
             if threshold_free > 0:
                 if queues_limited_full:

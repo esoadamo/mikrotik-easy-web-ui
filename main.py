@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 from flask import Flask, Response, render_template, redirect, url_for, request
 from gevent.pywsgi import WSGIServer
 from flask_httpauth import HTTPBasicAuth
+
+from bandwitch_balancer import Balancer
 from router_api import API
 
 try:
@@ -77,6 +79,18 @@ ARP_AUTO_REMOVE_TIME = (60 * int(os.getenv('ARP_AUTO_REMOVE_TIME'))) if os.geten
                                                                         is not None else None
 CPU_NOTIFICATION_THRESHOLD = int(os.getenv('CPU_NOTIFICATION_THRESHOLD')) if os.getenv('CPU_NOTIFICATION_THRESHOLD') \
                                                                              is not None else None
+BALANCER_ENABLED = os.getenv('BALANCER_ENABLED', 'no').lower() == 'yes'
+BALANCER_DOWN_MAX = int(os.getenv('BALANCER_DOWN_MAX', '0'))
+BALANCER_DOWN_MIN = int(os.getenv('BALANCER_DOWN_MIN', '0'))
+BALANCER_DOWN_THRESHOLD = int(os.getenv('BALANCER_DOWN_THRESHOLD', '0'))
+BALANCER_UP_MAX = int(os.getenv('BALANCER_UP_MAX', '0'))
+BALANCER_UP_MIN = int(os.getenv('BALANCER_UP_MIN', '0'))
+BALANCER_UP_THRESHOLD = int(os.getenv('BALANCER_UP_THRESHOLD', '0'))
+
+BALANCERS: Dict[str, Optional[Balancer]] = {
+    'up': None,
+    'down': None
+}
 
 
 def rt(data: any) -> Response:
@@ -379,6 +393,20 @@ def api_clients_all() -> Response:
 @app.route('/api/net-usage-by-ip')
 @auth.login_required
 def api_net_usage_by_ip() -> Response:
+    if BALANCER_ENABLED:
+        r = {}
+        for ip, rate in BALANCERS['down'].get_rates():
+            rate = int(rate / (8 * 1024))
+            ip = f'10.1.1.{ip}'
+            if rate != 0:
+                r[ip] = (rate, 0)
+        for ip, rate in BALANCERS['up'].get_rates():
+            ip = f'10.1.1.{ip}'
+            rate = int(rate / (8 * 1024))
+            if rate != 0:
+                r[ip] = (r[ip][0], rate) if ip in r else (0, rate)
+        return rt(r)
+
     entry = CACHE['net-usage-by-ip']
     time_to_next_request = entry.nextRequestTime - time()
     lock: Lock = entry.lock
@@ -658,6 +686,26 @@ def main() -> int:
         Thread(target=thread_test_dns, daemon=True).start()
     if FILE_ARP_WATCH_DB is not None or ARP_AUTO_REMOVE_TIME is not None:
         Thread(target=thread_arp_watch, daemon=True).start()
+    if BALANCER_ENABLED:
+        balancer_ip_prefix = LOCAL_NETWORK.rsplit('.', 1)[0]
+        BALANCERS['up'] = Balancer(
+            balancer_ip_prefix,
+            BALANCER_UP_MAX * (1024 ** 2),
+            BALANCER_UP_MIN * (1024 ** 2),
+            threshold=BALANCER_UP_THRESHOLD,
+            direction_upload=True,
+            suppress_output=True
+        )
+        BALANCERS['down'] = Balancer(
+            balancer_ip_prefix,
+            BALANCER_DOWN_MAX * (1024 ** 2),
+            BALANCER_DOWN_MIN * (1024 ** 2),
+            threshold=BALANCER_DOWN_THRESHOLD,
+            suppress_output=True
+        )
+        del balancer_ip_prefix
+        BALANCERS['up'].start()
+        BALANCERS['down'].start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
     http_server = WSGIServer(('127.0.0.1', int(WEB_PORT)), app)
     try:
