@@ -52,7 +52,7 @@ class Balancer(Thread):
         self.__ip_prefix = ip_prefix
         self.__name_prefix = f"balancer_{self.__ip_prefix}"
         self.__api: API = api
-        self.__queues_history: DictAverage[int] = DictAverage(n=2)
+        self.__queues_history: DictAverage[int] = DictAverage(n=5)
 
         self.__mark_cache: Dict[int, int] = {}
         self.__mark_cache_time: int = 0
@@ -184,17 +184,20 @@ class Balancer(Thread):
         for m in marks:
             ip = int(m['new-packet-mark'].rsplit('.', 1)[1])
             m_bytes = int(m['bytes'])
-            if ip in queues_map:
-                yield queues_map[ip]
-                continue
             if ip in self.__mark_cache:
+                if ip in queues_map:
+                    q_id = queues_map[ip].id
+                    q_max_rate = queues_map[ip].max_rate
+                else:
+                    q_id = None
+                    q_max_rate = self.__max_bandwitch
                 bytes_delta = m_bytes - self.__mark_cache[ip]
                 rate = int(8 * bytes_delta / time_delta)
                 yield Limit(
-                    id=None,
+                    id=q_id,
                     ip=ip,
                     rate=rate,
-                    max_rate=self.__max_bandwitch
+                    max_rate=q_max_rate
                 )
             self.__mark_cache[ip] = m_bytes
         self.__mark_cache_time = time_start
@@ -257,18 +260,14 @@ class Balancer(Thread):
             queues_limited = list(self.__get_queues_limited(queues))
             queues_limited_full = list(self.__get_queues_full(queues))
 
-            for q in queues:
-                if q.ip == 0:
-                    continue
-                self.__queues_history[q.ip] = q.rate
-
             bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
             bandwitch_free = (self.__max_bandwitch * self.__threshold) - bandwitch_used
+            print()
             print(f"{queues_used_limited=}")
             print(f"{queues_used_unlimited=}")
             print(f"{bandwitch_free / (1024 ** 2)}")
 
-            if bandwitch_free > (self.__max_bandwitch * (1 - self.__threshold)):
+            if bandwitch_free > 0:
                 queues_to_extend = queues_limited if not queues_limited_full else queues_limited_full
                 if queues_to_extend:
                     bandwitch_add = bandwitch_free / len(queues_to_extend)
@@ -282,12 +281,17 @@ class Balancer(Thread):
                     for q in queues_used_limited:
                         self.__set_limit(q.ip, new_bandwitch, queues)
 
+            for q in queues:
+                self.__queues_history[q.ip] = q.rate
+                if q.id is not None and self.__queues_history[q.ip] == 0:
+                    self.__delete_queue(q.ip, queues)
+
             sleep(5)
 
 
 if __name__ == '__main__':
     def main() -> None:
-        b = Balancer('10.1.1', 10 * (1024 ** 2), 3 * (1024 ** 2))
+        b = Balancer('10.1.1', 30 * (1024 ** 2), 3 * (1024 ** 2), threshold=70)
         b.start()
 
 
