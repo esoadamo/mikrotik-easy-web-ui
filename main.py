@@ -687,6 +687,7 @@ def main() -> int:
     if FILE_ARP_WATCH_DB is not None or ARP_AUTO_REMOVE_TIME is not None:
         Thread(target=thread_arp_watch, daemon=True).start()
     if BALANCER_ENABLED:
+        log("[MAIN] Using balancer as IP backend")
         balancer_ip_prefix = LOCAL_NETWORK.rsplit('.', 1)[0]
         BALANCERS['up'] = Balancer(
             balancer_ip_prefix,
