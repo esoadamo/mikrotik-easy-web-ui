@@ -52,7 +52,7 @@ class Balancer(Thread):
         self.__ip_prefix = ip_prefix
         self.__name_prefix = f"balancer_{self.__ip_prefix}"
         self.__api: API = api
-        self.__queues_history: DictAverage[int] = DictAverage(n=5)
+        self.__queues_history: DictAverage[int] = DictAverage(n=2)
 
         self.__mark_cache: Dict[int, int] = {}
         self.__mark_cache_time: int = 0
