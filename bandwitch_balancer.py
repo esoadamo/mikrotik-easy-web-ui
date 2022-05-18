@@ -54,7 +54,7 @@ class Balancer(Thread):
         self.__get_queues_history: DictAverage[int] = DictAverage(n=2)
 
         self.__init_marks()
-        self.__init_queues()
+        # self.__init_queues()
 
     def __init_marks(self) -> None:
         existing_marks: Set[str] = set(map(
@@ -65,21 +65,23 @@ class Balancer(Thread):
             )
         ))
 
-        for i in range(1, 256):
+        for i in range(1, 255):
             ip, mark_name = self.__ip_mark_name(i)
             if mark_name in existing_marks:
                 continue
             self.__api.call('ip/firewall/mangle').call('add', arguments={
                 'chain': 'forward',
                 'dst-address': f'{ip}/32' if i != 0 else f'{ip}/24',
+                'src-address': f'!{self.__ip_prefix}.0/24',
                 'action': 'mark-packet',
-                'new-packet-mark': mark_name
+                'new-packet-mark': mark_name,
+                'passthrough': 'no'
             })
 
     def __init_queues(self) -> None:
         queues = list(self.__get_queues(include_root=True))
         existing_ips: List[int] = list(map(lambda x: x.ip, queues))
-        for i in range(256):
+        for i in range(255):
             ip, mark_name = self.__ip_mark_name(i)
             _, parent_name = self.__ip_mark_name(0)
             if i == 0:
@@ -223,7 +225,7 @@ class Balancer(Thread):
 if __name__ == '__main__':
     def main() -> None:
         b = Balancer('10.1.1', 10 * (1024 ** 2), 3 * (1024 ** 2))
-        b.start()
+        # b.start()
 
 
     main()
