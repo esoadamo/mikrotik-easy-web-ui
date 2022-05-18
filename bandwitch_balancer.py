@@ -20,7 +20,7 @@ class Limit(NamedTuple):
 
     def __str__(self):
         rate = self.rate // (1024**2)
-        max_rate = self.rate // (1024 ** 2)
+        max_rate = self.max_rate // (1024 ** 2)
         usage = 0 if max_rate == 0 else int(100 * self.rate / self.max_rate)
         return f"Limit({self.ip=}, {usage=} %, {max_rate=}, {rate=})"
 
@@ -269,7 +269,7 @@ class Balancer(Thread):
                 self.__queues_history[q.ip] = q.rate
 
             bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
-            bandwitch_free = (self.__max_bandwitch * self.__threshold) - bandwitch_used
+            bandwitch_free = self.__max_bandwitch - bandwitch_used
             print()
             if queues_limited:
                 print('Limited:')
@@ -277,7 +277,7 @@ class Balancer(Thread):
             if queues_used_unlimited:
                 print('Unlimited:')
                 print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
-            print(f"Free: {bandwitch_free / (1024 ** 2):2.02f}")
+            print(f"Free: {bandwitch_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
 
             if bandwitch_free > 0:
                 if queues_limited_full:
@@ -289,14 +289,16 @@ class Balancer(Thread):
                     for q in queues_limited:
                         self.__set_limit(q.ip, min(q.max_rate + bandwitch_add, self.__max_bandwitch), queues)
             else:
+                bandwitch_reserved = 0
                 for q in queues_used_unlimited:
-                    self.__set_limit(q.ip, self.__min_bandwitch, queues)
+                    bandwitch_new = min(max(self.__min_bandwitch, q.rate), int(self.__max_bandwitch * self.__threshold))
+                    self.__set_limit(q.ip, bandwitch_new, queues)
                 if queues_used_limited:
-                    bandwitch_new = max(int((self.__max_bandwitch - len(queues_used_unlimited) * self.__min_bandwitch) / len(queues_used_limited)), self.__min_bandwitch)
+                    bandwitch_new = max(int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)), self.__min_bandwitch)
                     for q in queues_used_limited:
                         self.__set_limit(q.ip, bandwitch_new, queues)
 
-            sleep(3)
+            sleep(10)
 
 
 if __name__ == '__main__':
