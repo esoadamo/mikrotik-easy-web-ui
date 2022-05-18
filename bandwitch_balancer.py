@@ -33,9 +33,10 @@ class DictAverage(Generic[T]):
     def __setitem__(self, key: T, value: float) -> None:
         if key not in self.__data:
             self.__data[key] = deque()
-        self.__data[key].append(value)
-        if len(self.__data[key]) > self.__n:
+        if len(self.__data[key]) == self.__n:
             self.__data[key].popleft()
+        while len(self.__data[key]) < self.__n:
+            self.__data[key].append(value)
 
     def __getitem__(self, item: T) -> float:
         data = self.__data[item]
