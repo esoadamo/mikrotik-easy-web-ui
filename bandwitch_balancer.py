@@ -301,12 +301,25 @@ class Balancer(Thread):
                         self.__set_limit(q.ip, min(q.max_rate + bandwitch_add, self.__max_bandwitch), queues)
             else:
                 bandwitch_reserved = 0
-                for q in queues_used_unlimited:
-                    bandwitch_new = min(max(self.__min_bandwitch, int(self.__queues_history[q.ip])), int(self.__max_bandwitch * self.__threshold))
+                unlimited_rate_used = 0
+
+                def is_over_threshold_sum_rate(queue: Limit):
+                    nonlocal unlimited_rate_used
+                    unlimited_rate_used += queue.rate
+                    return unlimited_rate_used >= self.__min_bandwitch * self.__threshold
+
+                for q in filter(is_over_threshold_sum_rate, sorted(queues_used_unlimited, key=lambda x: x.rate)):
+                    bandwitch_new = min(
+                        max(self.__min_bandwitch, int(self.__queues_history[q.ip])),
+                        int(self.__max_bandwitch * self.__threshold)
+                    )
                     self.__set_limit(q.ip, bandwitch_new, queues)
                     bandwitch_reserved += bandwitch_new
                 if queues_used_limited:
-                    bandwitch_new = max(int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)), self.__min_bandwitch)
+                    bandwitch_new = max(
+                        int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)),
+                        self.__min_bandwitch
+                    )
                     for q in queues_used_limited:
                         self.__set_limit(q.ip, bandwitch_new, queues)
 
@@ -315,8 +328,10 @@ class Balancer(Thread):
 
 if __name__ == '__main__':
     def main() -> None:
-        b = Balancer('10.1.1', 30 * (1024 ** 2), 3 * (1024 ** 2), threshold=70)
+        b = Balancer('10.1.1', 30 * (1024 ** 2), 3 * (1024 ** 2), threshold=85)
         b.start()
+        while True:
+            sleep(1000)
 
 
     main()
