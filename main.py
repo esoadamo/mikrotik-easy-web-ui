@@ -555,7 +555,13 @@ def thread_test_dns() -> None:
 def thread_check_cpu() -> None:
     while True:
         sleep(5 * 60 + randint(30, 50))
-        cpu_load = float(API.call('/system/resource').get()[0]['cpu-load'])
+        cpu_loads: List[float] = []
+
+        for i in range(3):
+            cpu_loads.append(float(API.call('/system/resource').get()[0]['cpu-load']))
+            sleep(15)
+        cpu_load = sum(cpu_loads) / len(cpu_loads)
+
         if cpu_load > CPU_NOTIFICATION_THRESHOLD:
             msg = f"High router CPU usage ({cpu_load}%)"
             log("[CPU]", msg)
