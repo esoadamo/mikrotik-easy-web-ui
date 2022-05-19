@@ -304,6 +304,7 @@ class Balancer(Thread):
                 for q in queues_used_unlimited:
                     bandwitch_new = min(max(self.__min_bandwitch, q.rate), int(self.__max_bandwitch * self.__threshold))
                     self.__set_limit(q.ip, bandwitch_new, queues)
+                    bandwitch_reserved += bandwitch_new
                 if queues_used_limited:
                     bandwitch_new = max(int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)), self.__min_bandwitch)
                     for q in queues_used_limited:
