@@ -359,9 +359,9 @@ def api_clients() -> Response:
     lock: Lock = entry.lock
     if time_to_next_request < 0 and lock.acquire(blocking=False):
         if entry.nextRequestTime and time_to_next_request < -5 * 60:
-            entry.nextRequestDelay = 30
+            entry.nextRequestDelay = 5
         else:
-            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 60)
+            entry.nextRequestDelay = min(entry.nextRequestDelay + 0.2 + randint(0, 10) / 10, 15)
         entry.nextRequestTime = int(time()) + entry.nextRequestDelay
 
         def job():
