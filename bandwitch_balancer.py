@@ -102,7 +102,12 @@ class Balancer(Thread):
         for i in range(1, 255):
             self.__delete_queue(i, queues)
 
-    def __create_queue(self, ip: int, queues: Optional[Iterator[Limit]] = None, limit_at: Optional[int] = None, max_limit: Optional[int] = None) -> None:
+    def __create_queue(self,
+                       ip: int,
+                       queues: Optional[Iterator[Limit]] = None,
+                       limit_at: Optional[int] = None,
+                       max_limit: Optional[int] = None
+                       ) -> None:
         queues = list(queues if queues else self.__get_queues(include_root=True))
 
         for q in queues:
@@ -242,10 +247,19 @@ class Balancer(Thread):
     def __get_queues_used(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
         queues = list(self.__get_queues(queues))
 
-        return filter(
+        queues_nonzero_rate = filter(
             lambda x: x.rate > 0,
             queues
         )
+
+        rate_used = 0
+
+        def is_over_threshold_sum_rate(queue: Limit):
+            nonlocal rate_used
+            rate_used += queue.rate
+            return rate_used >= self.__min_bandwitch * self.__threshold
+
+        return filter(is_over_threshold_sum_rate, sorted(queues_nonzero_rate, key=lambda x: x.rate))
 
     def __get_queues_used_unlimited(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
         queues = self.__get_queues(queues)
@@ -265,11 +279,22 @@ class Balancer(Thread):
             queues_used
         )
 
+    def __get_queues_unused_limited(self, queues: Optional[Iterator[Limit]] = None) -> Iterator[Limit]:
+        queues = list(self.__get_queues(queues))
+        queues_used_ip = set(map(lambda x: x.ip, self.__get_queues_used(queues)))
+        queues_limited = list(self.__get_queues_limited(queues))
+
+        return filter(
+            lambda x: x.ip not in queues_used_ip,
+            queues_limited
+        )
+
     def run(self) -> None:
         while True:
             queues = list(self.__get_queues())
             queues_used_unlimited = list(self.__get_queues_used_unlimited(queues))
             queues_used_limited = list(self.__get_queues_used_limited(queues))
+            queues_unused_limited = list(self.__get_queues_unused_limited(queues))
             queues_limited = list(self.__get_queues_limited(queues))
             queues_limited_full = list(self.__get_queues_full(queues))
 
@@ -281,34 +306,38 @@ class Balancer(Thread):
             threshold_free = self.__max_bandwitch * self.__threshold - bandwitch_used
             if not self.suppress_output:
                 print()
+                print("--------------------")
                 if queues_limited:
                     print('Limited:')
-                    print('\n'.join(['- ' + str(x) for x in queues_limited]))
+                    print('\n'.join(['- ' + str(x) + (' (unused)' if x in queues_unused_limited else '')
+                                     for x in queues_limited]))
                 if queues_used_unlimited:
                     print('Unlimited:')
                     print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
                 print(
-                    f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, free threshold: {threshold_free / (1024 ** 2):2.02f}, used: {bandwitch_used / (1024 ** 2):2.02f} ({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
+                    f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, "
+                    f"free threshold: {threshold_free / (1024 ** 2):2.02f}, "
+                    f"used: {bandwitch_used / (1024 ** 2):2.02f} "
+                    f"({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
+                print("--------------------")
 
             if threshold_free > 0:
                 if queues_limited_full:
-                    bandwitch_new = int((sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full))
+                    bandwitch_new = int(
+                        (sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full)
+                    )
                     for q in queues_limited_full:
                         self.__set_limit(q.ip, bandwitch_new, queues)
-                elif queues_limited:
-                    bandwitch_add = bandwitch_free / len(queues_limited)
-                    for q in queues_limited:
+                elif queues_used_limited:
+                    bandwitch_add = bandwitch_free / len(queues_used_limited)
+                    for q in queues_used_limited:
                         self.__set_limit(q.ip, min(q.max_rate + bandwitch_add, self.__max_bandwitch), queues)
+                for q in queues_unused_limited:
+                    self.__set_limit(q.ip, self.__max_bandwitch, queues)
             else:
                 bandwitch_reserved = 0
-                unlimited_rate_used = 0
 
-                def is_over_threshold_sum_rate(queue: Limit):
-                    nonlocal unlimited_rate_used
-                    unlimited_rate_used += queue.rate
-                    return unlimited_rate_used >= self.__min_bandwitch * self.__threshold
-
-                for q in filter(is_over_threshold_sum_rate, sorted(queues_used_unlimited, key=lambda x: x.rate)):
+                for q in queues_used_unlimited:
                     bandwitch_new = min(
                         max(self.__min_bandwitch, int(self.__queues_history[q.ip])),
                         int(self.__max_bandwitch * self.__threshold)
@@ -328,7 +357,7 @@ class Balancer(Thread):
 
 if __name__ == '__main__':
     def main() -> None:
-        b = Balancer('10.1.1', 30 * (1024 ** 2), 3 * (1024 ** 2), threshold=85)
+        b = Balancer('10.1.1', 30 * (1024 ** 2), 3 * (1024 ** 2), threshold=93)
         b.start()
         while True:
             sleep(1000)
