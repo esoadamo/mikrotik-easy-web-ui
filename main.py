@@ -86,6 +86,7 @@ BALANCER_DOWN_THRESHOLD = int(os.getenv('BALANCER_DOWN_THRESHOLD', '0'))
 BALANCER_UP_MAX = int(os.getenv('BALANCER_UP_MAX', '0'))
 BALANCER_UP_MIN = int(os.getenv('BALANCER_UP_MIN', '0'))
 BALANCER_UP_THRESHOLD = int(os.getenv('BALANCER_UP_THRESHOLD', '0'))
+BALANCER_IP_PREFIX = LOCAL_NETWORK.rsplit('.', 1)[0]
 
 BALANCERS: Dict[str, Optional[Balancer]] = {
     'up': None,
@@ -397,11 +398,11 @@ def api_net_usage_by_ip() -> Response:
         r = {}
         for ip, rate in BALANCERS['down'].get_rates():
             rate = int(rate / (8 * 1024))
-            ip = f'10.1.1.{ip}'
+            ip = f'{BALANCER_IP_PREFIX}.{ip}'
             if rate != 0:
                 r[ip] = (rate, 0)
         for ip, rate in BALANCERS['up'].get_rates():
-            ip = f'10.1.1.{ip}'
+            ip = f'{BALANCER_IP_PREFIX}.{ip}'
             rate = int(rate / (8 * 1024))
             if rate != 0:
                 r[ip] = (r[ip][0], rate) if ip in r else (0, rate)
@@ -694,9 +695,8 @@ def main() -> int:
         Thread(target=thread_arp_watch, daemon=True).start()
     if BALANCER_ENABLED:
         log("[MAIN] Using balancer as IP backend")
-        balancer_ip_prefix = LOCAL_NETWORK.rsplit('.', 1)[0]
         BALANCERS['up'] = Balancer(
-            balancer_ip_prefix,
+            BALANCER_IP_PREFIX,
             BALANCER_UP_MAX * (1024 ** 2),
             BALANCER_UP_MIN * (1024 ** 2),
             threshold=BALANCER_UP_THRESHOLD,
@@ -704,13 +704,12 @@ def main() -> int:
             suppress_output=True
         )
         BALANCERS['down'] = Balancer(
-            balancer_ip_prefix,
+            BALANCER_IP_PREFIX,
             BALANCER_DOWN_MAX * (1024 ** 2),
             BALANCER_DOWN_MIN * (1024 ** 2),
             threshold=BALANCER_DOWN_THRESHOLD,
             suppress_output=True
         )
-        del balancer_ip_prefix
         BALANCERS['up'].start()
         BALANCERS['down'].start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
