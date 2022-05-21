@@ -6,6 +6,7 @@ from typing import Iterator, Set, Tuple, NamedTuple, List, Optional, Dict, TypeV
 from dotenv import load_dotenv
 
 from router_api import API
+from routeros_api.exceptions import RouterOsApiError
 
 load_dotenv()
 
@@ -291,68 +292,73 @@ class Balancer(Thread):
 
     def run(self) -> None:
         while True:
-            queues = list(self.__get_queues())
-            queues_used_unlimited = list(self.__get_queues_used_unlimited(queues))
-            queues_used_limited = list(self.__get_queues_used_limited(queues))
-            queues_unused_limited = list(self.__get_queues_unused_limited(queues))
-            queues_limited = list(self.__get_queues_limited(queues))
-            queues_limited_full = list(self.__get_queues_full(queues))
-
-            for q in queues:
-                self.__queues_history[q.ip] = q.rate
-
-            bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
-            bandwitch_free = self.__max_bandwitch - bandwitch_used
-            threshold_free = self.__max_bandwitch * self.__threshold - bandwitch_used
-            if not self.suppress_output:
-                print()
-                print("--------------------")
-                if queues_limited:
-                    print('Limited:')
-                    print('\n'.join(['- ' + str(x) + (' (unused)' if x in queues_unused_limited else '')
-                                     for x in queues_limited]))
-                if queues_used_unlimited:
-                    print('Unlimited:')
-                    print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
-                print(
-                    f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, "
-                    f"free threshold: {threshold_free / (1024 ** 2):2.02f}, "
-                    f"used: {bandwitch_used / (1024 ** 2):2.02f} "
-                    f"({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
-                print("--------------------")
-
-            if threshold_free > 0:
-                if queues_limited_full:
-                    bandwitch_new = int(
-                        (sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full)
-                    )
-                    for q in queues_limited_full:
-                        self.__set_limit(q.ip, bandwitch_new, queues)
-                elif queues_used_limited:
-                    bandwitch_add = bandwitch_free / len(queues_used_limited)
-                    for q in queues_used_limited:
-                        self.__set_limit(q.ip, min(q.max_rate + bandwitch_add, self.__max_bandwitch), queues)
-                for q in queues_unused_limited:
-                    self.__set_limit(q.ip, self.__max_bandwitch, queues)
-            else:
-                bandwitch_reserved = 0
-
-                for q in queues_used_unlimited:
-                    bandwitch_new = min(
-                        max(self.__min_bandwitch, int(self.__queues_history[q.ip])),
-                        int(self.__max_bandwitch * self.__threshold)
-                    )
-                    self.__set_limit(q.ip, bandwitch_new, queues)
-                    bandwitch_reserved += bandwitch_new
-                if queues_used_limited:
-                    bandwitch_new = max(
-                        int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)),
-                        self.__min_bandwitch
-                    )
-                    for q in queues_used_limited:
-                        self.__set_limit(q.ip, bandwitch_new, queues)
-
+            try:
+                self.__perform_cycle()
+            except RouterOsApiError:
+                pass
             sleep(10)
+
+    def __perform_cycle(self) -> None:
+        queues = list(self.__get_queues())
+        queues_used_unlimited = list(self.__get_queues_used_unlimited(queues))
+        queues_used_limited = list(self.__get_queues_used_limited(queues))
+        queues_unused_limited = list(self.__get_queues_unused_limited(queues))
+        queues_limited = list(self.__get_queues_limited(queues))
+        queues_limited_full = list(self.__get_queues_full(queues))
+
+        for q in queues:
+            self.__queues_history[q.ip] = q.rate
+
+        bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
+        bandwitch_free = self.__max_bandwitch - bandwitch_used
+        threshold_free = self.__max_bandwitch * self.__threshold - bandwitch_used
+        if not self.suppress_output:
+            print()
+            print("--------------------")
+            if queues_limited:
+                print('Limited:')
+                print('\n'.join(['- ' + str(x) + (' (unused)' if x in queues_unused_limited else '')
+                                 for x in queues_limited]))
+            if queues_used_unlimited:
+                print('Unlimited:')
+                print('\n'.join(['- ' + str(x) for x in queues_used_unlimited]))
+            print(
+                f"Free total: {bandwitch_free / (1024 ** 2):2.02f}, "
+                f"free threshold: {threshold_free / (1024 ** 2):2.02f}, "
+                f"used: {bandwitch_used / (1024 ** 2):2.02f} "
+                f"({int(100 * bandwitch_used / self.__max_bandwitch)} %)")
+            print("--------------------")
+
+        if threshold_free > 0:
+            if queues_limited_full:
+                bandwitch_new = int(
+                    (sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full)
+                )
+                for q in queues_limited_full:
+                    self.__set_limit(q.ip, bandwitch_new, queues)
+            elif queues_used_limited:
+                bandwitch_add = bandwitch_free / len(queues_used_limited)
+                for q in queues_used_limited:
+                    self.__set_limit(q.ip, min(q.max_rate + bandwitch_add, self.__max_bandwitch), queues)
+            for q in queues_unused_limited:
+                self.__set_limit(q.ip, self.__max_bandwitch, queues)
+        else:
+            bandwitch_reserved = 0
+
+            for q in queues_used_unlimited:
+                bandwitch_new = min(
+                    max(self.__min_bandwitch, int(self.__queues_history[q.ip])),
+                    int(self.__max_bandwitch * self.__threshold)
+                )
+                self.__set_limit(q.ip, bandwitch_new, queues)
+                bandwitch_reserved += bandwitch_new
+            if queues_used_limited:
+                bandwitch_new = max(
+                    int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)),
+                    self.__min_bandwitch
+                )
+                for q in queues_used_limited:
+                    self.__set_limit(q.ip, bandwitch_new, queues)
 
 
 if __name__ == '__main__':
