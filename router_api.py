@@ -1,11 +1,16 @@
 import os
-from threading import Lock, get_ident
+from threading import Lock, get_ident, Thread
 from time import sleep, time
 from typing import TypedDict, Dict, Optional, Tuple, Set, NamedTuple
 
 from routeros_api.api import RouterOsApi, RouterOsApiPool
 from routeros_api.exceptions import RouterOsApiError
 from routeros_api.resource import RouterOsResource
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_SLEEP_TIME = float(os.getenv('API_SLEEP_TIME', '0'))
 
 
 class APICredentials(NamedTuple):
@@ -23,6 +28,9 @@ class API:
 
     __thread_cache: Dict[int, CacheContent] = {}
     __cache_lock = Lock()
+
+    __sleep_command_lock = Lock()
+    __sleep_login_lock = Lock()
 
     @classmethod
     def is_ready(cls) -> bool:
@@ -43,14 +51,25 @@ class API:
 
     @classmethod
     def __create_new_connection(cls) -> Tuple[RouterOsApi, RouterOsApiPool]:
-        username, password, address = cls.__get_login_credentials()
-        conn = RouterOsApiPool(address,
-                               username=username,
-                               password=password,
-                               use_ssl=True,
-                               ssl_verify=False,
-                               plaintext_login=True)
-        return conn.get_api(), conn
+        single_thread_lock = not not API_SLEEP_TIME
+        try:
+            if single_thread_lock:
+                cls.__sleep_login_lock.acquire()
+            username, password, address = cls.__get_login_credentials()
+            conn = RouterOsApiPool(address,
+                                   username=username,
+                                   password=password,
+                                   use_ssl=True,
+                                   ssl_verify=False,
+                                   plaintext_login=True)
+            return conn.get_api(), conn
+        finally:
+            if single_thread_lock:
+                def unlock_time():
+                    sleep(API_SLEEP_TIME)
+                    cls.__sleep_login_lock.release()
+
+                Thread(target=unlock_time).start()
 
     @classmethod
     def watchdog(cls) -> None:
@@ -98,6 +117,17 @@ class API:
 
     @classmethod
     def call(cls, path: str) -> RouterOsResource:
-        api, lock = cls.__get()
-        with lock:
-            return api.get_resource(path)
+        single_thread_lock = not not API_SLEEP_TIME
+        try:
+            if single_thread_lock:
+                cls.__sleep_command_lock.acquire()
+            api, lock = cls.__get()
+            with lock:
+                return api.get_resource(path)
+        finally:
+            if single_thread_lock:
+                def unlock_time():
+                    sleep(API_SLEEP_TIME)
+                    cls.__sleep_command_lock.release()
+
+                Thread(target=unlock_time).start()

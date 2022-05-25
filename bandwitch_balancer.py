@@ -180,11 +180,11 @@ class Balancer(Thread):
         if existing is not None:
             yield from list(existing)
             return
+        time_start = time()
         marks = list(filter(
             lambda x: x.get('new-packet-mark', '').startswith(self.__name_prefix),
             self.__api.call('ip/firewall/mangle').call('print', arguments={'stats': ''})
         ))
-        time_start = time()
 
         queues_map = {x.ip: x for x in map(
             self.__queue_data_to_limit,
