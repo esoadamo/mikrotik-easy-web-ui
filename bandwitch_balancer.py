@@ -63,6 +63,8 @@ class Balancer(Thread):
         self.__direction_upload = direction_upload
         self.__api: API = api
         self.__queues_history: DictAverage[int] = DictAverage(n=3)
+        self.__queues_history_long: DictAverage[int] = DictAverage(n=60)
+        self.__queues_priority: Dict[int, int] = {}
 
         self.__mark_cache: Dict[int, int] = {}
         self.__mark_cache_time: int = 0
@@ -72,6 +74,12 @@ class Balancer(Thread):
 
     def get_rates(self) -> Iterator[Tuple[int, int]]:
         yield from self.__queues_history
+
+    def set_queue_priority(self, ip: int, value: int) -> None:
+        self.__queues_priority[ip] = value
+
+    def get_queue_priority(self, ip: int) -> int:
+        return self.__queues_priority.get(ip, 100)
 
     def __init_marks(self) -> None:
         existing_marks: Set[str] = set(map(
@@ -290,6 +298,20 @@ class Balancer(Thread):
             queues_limited
         )
 
+    def __rebalance_queues(
+            self, queues: Iterator[Limit], free_bandwitch: int, queues_all: Optional[Iterator[Limit]] = None
+    ) -> None:
+        queues = list(queues)
+        queue_scores: Dict[int, float] = {
+            q.ip: self.get_queue_priority(q.ip) * self.__max_bandwitch / self.__queues_history_long[q.ip] for q in queues
+        }
+        scores_sum = sum(queue_scores.values())
+        for q in queues:
+            queue_scores[q.ip] /= scores_sum
+
+        for q in queues:
+            self.__set_limit(q.ip, max(self.__min_bandwitch, int(free_bandwitch * queue_scores[q.ip])), queues_all)
+
     def run(self) -> None:
         while True:
             try:
@@ -308,6 +330,7 @@ class Balancer(Thread):
 
         for q in queues:
             self.__queues_history[q.ip] = q.rate
+            self.__queues_history_long[q.ip] = q.rate
 
         bandwitch_used = sum(map(lambda x: x[1], self.__queues_history))
         bandwitch_free = self.__max_bandwitch - bandwitch_used
@@ -331,11 +354,8 @@ class Balancer(Thread):
 
         if threshold_free > 0:
             if queues_limited_full:
-                bandwitch_new = int(
-                    (sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free) / len(queues_limited_full)
-                )
-                for q in queues_limited_full:
-                    self.__set_limit(q.ip, bandwitch_new, queues)
+                bandwitch_to_rebalance = sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free
+                self.__rebalance_queues(queues_limited_full, bandwitch_to_rebalance, queues)
             elif queues_used_limited:
                 bandwitch_add = bandwitch_free / len(queues_used_limited)
                 for q in queues_used_limited:
@@ -353,12 +373,7 @@ class Balancer(Thread):
                 self.__set_limit(q.ip, bandwitch_new, queues)
                 bandwitch_reserved += bandwitch_new
             if queues_used_limited:
-                bandwitch_new = max(
-                    int((self.__max_bandwitch - bandwitch_reserved) / len(queues_used_limited)),
-                    self.__min_bandwitch
-                )
-                for q in queues_used_limited:
-                    self.__set_limit(q.ip, bandwitch_new, queues)
+                self.__rebalance_queues(queues_used_limited, self.__max_bandwitch - bandwitch_reserved, queues)
 
 
 if __name__ == '__main__':
