@@ -189,9 +189,11 @@ class Balancer(Thread):
             yield from list(existing)
             return
         time_start = time()
+        api_res, api_wait_duration = self.__api.call_sleep('ip/firewall/mangle')
+        time_start += api_wait_duration
         marks = list(filter(
             lambda x: x.get('new-packet-mark', '').startswith(self.__name_prefix),
-            self.__api.call('ip/firewall/mangle').call('print', arguments={'stats': ''})
+            api_res.call('print', arguments={'stats': ''})
         ))
 
         queues_map = {x.ip: x for x in map(

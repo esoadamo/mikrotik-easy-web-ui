@@ -134,13 +134,18 @@ class API:
 
     @classmethod
     def call(cls, path: str) -> RouterOsResource:
+        return cls.call_sleep(path)[0]
+
+    @classmethod
+    def call_sleep(cls, path: str) -> Tuple[RouterOsResource, float]:
         single_thread_lock = not not API_SLEEP_TIME
         try:
+            time_start = time()
             if single_thread_lock:
                 cls.__sleep_command_lock.acquire()
             api, lock = cls.__get()
             with lock:
-                return api.get_resource(path)
+                return api.get_resource(path), time() - time_start
         finally:
             if single_thread_lock:
                 def unlock_time():
