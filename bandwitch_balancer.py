@@ -354,7 +354,10 @@ class Balancer(Thread):
 
         if threshold_free > 0:
             if queues_limited_full:
-                bandwitch_to_rebalance = sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free
+                bandwitch_to_rebalance = min(
+                    sum(map(lambda x: x.rate, queues_limited_full)) + bandwitch_free,
+                    self.__max_bandwitch - 1
+                )
                 self.__rebalance_queues(queues_limited_full, bandwitch_to_rebalance, queues)
             elif queues_used_limited:
                 bandwitch_add = bandwitch_free / len(queues_used_limited)
