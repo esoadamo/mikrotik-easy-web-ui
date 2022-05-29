@@ -722,4 +722,12 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    exit(main())
+    try:
+        exit_code = main()
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        API.disconnect()
+
+    exit(exit_code)

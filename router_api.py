@@ -32,6 +32,7 @@ class API:
 
     __sleep_command_lock = Lock()
     __sleep_login_lock = Lock()
+    __single_thread_lock_enabled = not not API_SLEEP_TIME
 
     @classmethod
     def is_ready(cls) -> bool:
@@ -52,9 +53,8 @@ class API:
 
     @classmethod
     def __create_new_connection(cls) -> Tuple[RouterOsApi, RouterOsApiPool]:
-        single_thread_lock = not not API_SLEEP_TIME_LOGIN
         try:
-            if single_thread_lock:
+            if cls.__single_thread_lock_enabled:
                 cls.__sleep_login_lock.acquire()
             username, password, address = cls.__get_login_credentials()
             conn = RouterOsApiPool(address,
@@ -65,7 +65,7 @@ class API:
                                    plaintext_login=True)
             return conn.get_api(), conn
         finally:
-            if single_thread_lock:
+            if cls.__single_thread_lock_enabled:
                 def unlock_time():
                     sleep(API_SLEEP_TIME_LOGIN)
                     cls.__sleep_login_lock.release()
@@ -101,16 +101,15 @@ class API:
                     cls.__thread_cache[thread_id]['last_heartbeat_check'] = int(time())
                     try:
                         api, conn = cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['conn']
-                        single_thread_lock = not not API_SLEEP_TIME
                         try:
-                            if single_thread_lock:
-                                cls.__sleep_command_lock.acquire()
+                            if cls.__single_thread_lock_enabled:
+                                cls.__sleep_login_lock.acquire()
                             api.get_resource('/system/resource').get()
                         finally:
-                            if single_thread_lock:
+                            if cls.__single_thread_lock_enabled:
                                 def unlock_time():
                                     sleep(API_SLEEP_TIME)
-                                    cls.__sleep_command_lock.release()
+                                    cls.__sleep_login_lock.release()
                                 Thread(target=unlock_time).start()
                     except RouterOsApiError:
                         try:
@@ -133,21 +132,29 @@ class API:
             return cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['lock']
 
     @classmethod
+    def disconnect(cls):
+        with cls.__cache_lock:
+            for data in cls.__thread_cache.values():
+                data['conn'].disconnect()
+                sleep(API_SLEEP_TIME_LOGIN)
+            for key in list(cls.__thread_cache.keys()):
+                del cls.__thread_cache[key]
+
+    @classmethod
     def call(cls, path: str) -> RouterOsResource:
         return cls.call_sleep(path)[0]
 
     @classmethod
     def call_sleep(cls, path: str) -> Tuple[RouterOsResource, float]:
-        single_thread_lock = not not API_SLEEP_TIME
         try:
             time_start = time()
-            if single_thread_lock:
+            if cls.__single_thread_lock_enabled:
                 cls.__sleep_command_lock.acquire()
             api, lock = cls.__get()
             with lock:
                 return api.get_resource(path), time() - time_start
         finally:
-            if single_thread_lock:
+            if cls.__single_thread_lock_enabled:
                 def unlock_time():
                     sleep(API_SLEEP_TIME)
                     cls.__sleep_command_lock.release()
