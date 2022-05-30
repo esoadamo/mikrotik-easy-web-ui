@@ -5,7 +5,7 @@ from typing import Iterator, Set, Tuple, NamedTuple, List, Optional, Dict, TypeV
 
 from dotenv import load_dotenv
 
-from router_api import API
+from router_api import API, APISingleTread
 from routeros_api.exceptions import RouterOsApiError
 
 load_dotenv()
@@ -52,7 +52,7 @@ class DictAverage(Generic[T]):
 
 class Balancer(Thread):
     def __init__(self, ip_prefix: str, max_bandwitch: int, min_bandwitch: int, threshold: int = 95,
-                 api: API = API(), direction_upload: bool = False, suppress_output: bool = False) -> None:
+                 api: APISingleTread = API, direction_upload: bool = False, suppress_output: bool = False) -> None:
         super().__init__(daemon=True)
         self.suppress_output = suppress_output
         self.__max_bandwitch = max_bandwitch - min_bandwitch
@@ -96,7 +96,7 @@ class Balancer(Thread):
                 continue
             addr_local = f'{ip}/32' if i != 0 else f'{ip}/24'
             addr_lan = f'!{self.__ip_prefix}.0/24'
-            self.__api.call('ip/firewall/mangle').call('add', arguments={
+            self.__api.call('ip/firewall/mangle').exec('add', arguments={
                 'chain': 'forward',
                 'dst-address': addr_local if not self.__direction_upload else addr_lan,
                 'src-address': addr_lan if not self.__direction_upload else addr_local,
@@ -130,7 +130,7 @@ class Balancer(Thread):
         if ip == 0:
             parent_name = 'bridge'
 
-        self.__api.call('queue/tree').call('add', arguments={
+        self.__api.call('queue/tree').exec('add', arguments={
             'name': mark_name,
             'max-limit': '999M' if limit_at is None else str(max_limit),
             'limit-at': '999M' if max_limit is None else str(limit_at),
@@ -156,7 +156,7 @@ class Balancer(Thread):
 
         if queues is None:
             queue_data = self.__queue_data_to_limit(
-                self.__api.call('queue/tree').call('print', queries={'name': mark_name})[0]
+                self.__api.call('queue/tree').exec('print', queries={'name': mark_name})[0]
             )
         else:
             queue_data = next(filter(lambda x: x.ip == ip, queues))
@@ -189,18 +189,18 @@ class Balancer(Thread):
             yield from list(existing)
             return
         time_start = time()
-        api_res, api_wait_duration = self.__api.call_sleep('ip/firewall/mangle')
-        time_start += api_wait_duration
+        api_res = self.__api.call('ip/firewall/mangle')
         marks = list(filter(
             lambda x: x.get('new-packet-mark', '').startswith(self.__name_prefix),
-            api_res.call('print', arguments={'stats': ''})
+            api_res.exec('print', arguments={'stats': ''})
         ))
+        time_start += api_res.wait_time
 
         queues_map = {x.ip: x for x in map(
             self.__queue_data_to_limit,
             filter(
                 lambda x: x['name'].startswith(self.__name_prefix) and (include_root or not x['name'].endswith('.000')),
-                self.__api.call('queue/tree').call('print', arguments={'stats': ''})
+                self.__api.call('queue/tree').exec('print', arguments={'stats': ''})
             )
         )}
 

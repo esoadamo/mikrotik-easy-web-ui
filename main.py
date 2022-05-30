@@ -62,6 +62,7 @@ app = Flask(__name__, static_folder='static', template_folder='html')
 auth = HTTPBasicAuth()
 
 LOCAL_NETWORK = os.getenv('LOCAL_NETWORK')
+LOCAL_ADDRESS = os.getenv('LOCAL_ADDRESS')
 WEB_PORT = os.getenv('WEB_UI_PORT')
 DoH_SERVER = os.getenv('AUTO_DoH_SERVER')
 DNS_TRUSTED_SERVERS = os.getenv('DNS_TRUSTED_SERVERS')
@@ -135,13 +136,13 @@ def set_doh_enabled(enabled: bool, reset_after: Optional[int] = None) -> None:
     curr_is_enabled = API.call('/ip/dns').get()[0].get('use-doh-server', '') == DoH_SERVER
 
     if not curr_is_enabled and enabled:
-        API.call('/ip/dns').call('set', arguments={
+        API.call('/ip/dns').exec('set', arguments={
             'use-doh-server': DoH_SERVER,
             'verify-doh-cert': 'yes',
             'servers': '' if DNS_TRUSTED_SERVERS is None else DNS_TRUSTED_SERVERS
         })
     elif curr_is_enabled is not enabled:
-        API.call('/ip/dns').call('set', arguments={
+        API.call('/ip/dns').exec('set', arguments={
             'use-doh-server': '',
             'servers': '1.1.1.1,1.0.0.1,8.8.8.8,8.4.4.8' if DNS_FALLBACK_SERVERS is None else DNS_FALLBACK_SERVERS
         })
@@ -177,7 +178,7 @@ def limit_add(name: str, target: str, upload: float, download: float) -> None:
         if existing_limit_name == name or existing_limit_name.startswith(f"_{target}"):
             limit_remove(existing_limit_name)
             break
-    API.call('/queue/simple').call('add', arguments={
+    API.call('/queue/simple').exec('add', arguments={
         'name': name,
         'target': f"{target}/32" if target != "EVERYONE" else LOCAL_NETWORK,
         'max-limit': "%.2fM/%.2fM" % (upload * 8, download * 8)
@@ -211,7 +212,7 @@ def log(*args) -> None:
 
 @retry_on_error
 def get_updates_available() -> bool:
-    res = API.call('/system/package/update').call('check-for-updates')
+    res = API.call('/system/package/update').exec('check-for-updates')
     return 'available' in res[-1]['status'].lower()
 
 
@@ -257,7 +258,7 @@ def get_clients() -> CachedRequestActiveClientsCache:
     arp_clients = get_arp_clients()
     r: CachedRequestActiveClientsCache = []
     for client in response_leases:
-        if client.get('address', '') == API.get_address():
+        if client.get('address', '') == API.address:
             continue
         if client.get('disabled', 'false') == 'true':
             continue
@@ -310,7 +311,7 @@ def get_clients() -> CachedRequestActiveClientsCache:
 def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
     ip_speed: Dict[str, Tuple[int, int]] = {}
     if not get_sniffer_running():
-        API.call('/tool/sniffer').call('start')
+        API.call('/tool/sniffer').exec('start')
     packets = API.call('/tool/sniffer/host').get()
     for packet in packets:
         ip_from: str = packet.get('address', '')
@@ -322,14 +323,13 @@ def get_net_usage_by_ip() -> CachedRequestNetUsageByIPCache:
             continue
         ip_speed[ip_from] = (speed_down, speed_up)
 
-    router_ip = API.get_address()
-    server_ip = os.getenv('LOCAL_ADDRESS')
-    if router_ip in ip_speed and server_ip in ip_speed:
+    router_ip = API.address
+    if router_ip in ip_speed and LOCAL_ADDRESS in ip_speed:
         router_down, router_up = ip_speed[router_ip]
-        server_down, server_up = ip_speed[server_ip]
-        ip_speed[server_ip] = (max(0, server_down - router_up), max(0, server_up - router_down))
+        server_down, server_up = ip_speed[LOCAL_ADDRESS]
+        ip_speed[LOCAL_ADDRESS] = (max(0, server_down - router_up), max(0, server_up - router_down))
         ip_speed[router_ip] = (max(0, router_up - server_down), max(0, router_down - server_up))
-        for ip in (server_ip, router_ip):
+        for ip in (LOCAL_ADDRESS, router_ip):
             if sum(ip_speed[ip]) <= 0:
                 del ip_speed[ip]
 
@@ -348,7 +348,7 @@ def verify_password(username: str, password: str):
 @app.route('/')
 @auth.login_required
 def web_root() -> str:
-    return render_template('index.html', router_address=API.get_address())
+    return render_template('index.html', router_address=API.address)
 
 
 @app.route('/api/clients')
@@ -480,7 +480,7 @@ def thread_stop_sniffer() -> None:
     while True:
         if CACHE['net-usage-by-ip'].nextRequestTime > 0 and \
                 CACHE['net-usage-by-ip'].nextRequestTime - time() < -600 and get_sniffer_running():
-            API.call('/tool/sniffer').call('stop')
+            API.call('/tool/sniffer').exec('stop')
         sleep((5 + randint(0, 10)) * 60)
 
 
@@ -673,13 +673,12 @@ def thread_arp_watch() -> None:
 
 def main() -> int:
     log("[MAIN] starting up")
-    if not API.is_ready():
+    if not API.is_ready:
         log("[MAIN] Error: Login credentials are missing!")
         return 1
-    if not WEB_PORT or not LOCAL_NETWORK or not API.get_address():
+    if not WEB_PORT or not LOCAL_NETWORK or not API.address:
         log("[MAIN] Error: Some required settings are missing")
         return 1
-    Thread(target=API.watchdog, daemon=True).start()
     Thread(target=thread_notif_logged_errors, daemon=True).start()
     Thread(target=thread_check_updates, daemon=True).start()
     Thread(target=thread_stop_sniffer, daemon=True).start()
@@ -727,7 +726,5 @@ if __name__ == '__main__':
     except Exception:
         exit_code = 1
         raise
-    finally:
-        API.disconnect()
 
     exit(exit_code)

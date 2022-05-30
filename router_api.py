@@ -1,7 +1,9 @@
 import os
 from threading import Lock, get_ident, Thread
 from time import sleep, time
-from typing import TypedDict, Dict, Optional, Tuple, Set, NamedTuple
+from queue import Queue
+from typing import TypedDict, Dict, Optional, Tuple, Set, NamedTuple, Any
+from sys import stderr
 
 from routeros_api.api import RouterOsApi, RouterOsApiPool
 from routeros_api.exceptions import RouterOsApiError
@@ -11,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_SLEEP_TIME = float(os.getenv('API_SLEEP_TIME', '0'))
-API_SLEEP_TIME_LOGIN = float(os.getenv('API_SLEEP_TIME_LOGIN', f'{API_SLEEP_TIME}'))
 
 
 class APICredentials(NamedTuple):
@@ -20,7 +21,7 @@ class APICredentials(NamedTuple):
     address: str
 
 
-class API:
+class APIMultithread:
     class CacheContent(TypedDict):
         last_heartbeat_check: int
         api: RouterOsApi
@@ -29,10 +30,7 @@ class API:
 
     __thread_cache: Dict[int, CacheContent] = {}
     __cache_lock = Lock()
-
-    __sleep_command_lock = Lock()
-    __sleep_login_lock = Lock()
-    __single_thread_lock_enabled = not not API_SLEEP_TIME
+    __watchdog_running = False
 
     @classmethod
     def is_ready(cls) -> bool:
@@ -53,24 +51,14 @@ class API:
 
     @classmethod
     def __create_new_connection(cls) -> Tuple[RouterOsApi, RouterOsApiPool]:
-        try:
-            if cls.__single_thread_lock_enabled:
-                cls.__sleep_login_lock.acquire()
-            username, password, address = cls.__get_login_credentials()
-            conn = RouterOsApiPool(address,
-                                   username=username,
-                                   password=password,
-                                   use_ssl=True,
-                                   ssl_verify=False,
-                                   plaintext_login=True)
-            return conn.get_api(), conn
-        finally:
-            if cls.__single_thread_lock_enabled:
-                def unlock_time():
-                    sleep(API_SLEEP_TIME_LOGIN)
-                    cls.__sleep_login_lock.release()
-
-                Thread(target=unlock_time).start()
+        username, password, address = cls.__get_login_credentials()
+        conn = RouterOsApiPool(address,
+                               username=username,
+                               password=password,
+                               use_ssl=True,
+                               ssl_verify=False,
+                               plaintext_login=True)
+        return conn.get_api(), conn
 
     @classmethod
     def watchdog(cls) -> None:
@@ -84,13 +72,17 @@ class API:
                         old_sessions.add(session_id)
                 for session_id in old_sessions:
                     try:
-                        with cls.__sleep_login_lock:
-                            cls.__thread_cache[session_id]['conn'].disconnect()
-                            if API_SLEEP_TIME_LOGIN:
-                                sleep(API_SLEEP_TIME_LOGIN)
+                        cls.__thread_cache[session_id]['conn'].disconnect()
                     except RouterOsApiError:
                         pass
                     del cls.__thread_cache[session_id]
+
+    @classmethod
+    def watchdog_start(cls) -> None:
+        if cls.__watchdog_running:
+            return
+        cls.__watchdog_running = True
+        Thread(target=cls.watchdog, daemon=True).start()
 
     @classmethod
     def __get(cls) -> Tuple[RouterOsApi, Lock]:
@@ -101,22 +93,12 @@ class API:
                     cls.__thread_cache[thread_id]['last_heartbeat_check'] = int(time())
                     try:
                         api, conn = cls.__thread_cache[thread_id]['api'], cls.__thread_cache[thread_id]['conn']
-                        try:
-                            if cls.__single_thread_lock_enabled:
-                                cls.__sleep_login_lock.acquire()
-                            api.get_resource('/system/resource').get()
-                        finally:
-                            if cls.__single_thread_lock_enabled:
-                                def unlock_time():
-                                    sleep(API_SLEEP_TIME)
-                                    cls.__sleep_login_lock.release()
-                                Thread(target=unlock_time).start()
+                        api.get_resource('/system/resource').get()
                     except RouterOsApiError:
                         try:
-                            with cls.__sleep_login_lock:
-                                conn.disconnect()
-                                if API_SLEEP_TIME_LOGIN:
-                                    sleep(API_SLEEP_TIME_LOGIN)
+                            conn.disconnect()
+                            if API_SLEEP_TIME:
+                                sleep(API_SLEEP_TIME)
                         except RouterOsApiError:
                             pass
                         del cls.__thread_cache[thread_id]
@@ -136,27 +118,119 @@ class API:
         with cls.__cache_lock:
             for data in cls.__thread_cache.values():
                 data['conn'].disconnect()
-                sleep(API_SLEEP_TIME_LOGIN)
+                if API_SLEEP_TIME:
+                    sleep(API_SLEEP_TIME)
             for key in list(cls.__thread_cache.keys()):
                 del cls.__thread_cache[key]
 
     @classmethod
     def call(cls, path: str) -> RouterOsResource:
-        return cls.call_sleep(path)[0]
+        api, lock = cls.__get()
+        return api.get_resource(path)
 
-    @classmethod
-    def call_sleep(cls, path: str) -> Tuple[RouterOsResource, float]:
-        try:
-            time_start = time()
-            if cls.__single_thread_lock_enabled:
-                cls.__sleep_command_lock.acquire()
-            api, lock = cls.__get()
-            with lock:
-                return api.get_resource(path), time() - time_start
-        finally:
-            if cls.__single_thread_lock_enabled:
-                def unlock_time():
+
+class APISingleThreadPath:
+    def __init__(self, path: str, queue_in: Queue, queue_out: Queue, lock_command: Lock):
+        self.__path = path
+        self.__queue_in = queue_in
+        self.__queue_out = queue_out
+        self.__lock_command = lock_command
+        self.__wait_time = 0.0
+
+    @property
+    def wait_time(self) -> float:
+        return self.__wait_time
+
+    def __call(self, action: str, args: Tuple[Any] = (), kwargs: Optional[Dict[str, Any]] = None) -> Any:
+        kwargs = kwargs or {}
+        command = APISingleTreadWorkerCommand(
+            action=action,
+            args=args,
+            kwargs=kwargs,
+            path=self.__path
+        )
+        time_start = time()
+        with self.__lock_command:
+            self.__queue_in.put(command)
+            self.__wait_time = time() - time_start
+            output = self.__queue_out.get()
+            if isinstance(output, Exception):
+                raise output
+            return output
+
+    def get(self, *args, **kwargs) -> Any:
+        return self.__call('get', args, kwargs)
+
+    def remove(self, *args, **kwargs) -> Any:
+        return self.__call('remove', args, kwargs)
+
+    def set(self, *args, **kwargs) -> Any:
+        return self.__call('set', args, kwargs)
+
+    def exec(self,
+             command: str,
+             arguments: Optional[Dict[str, Any]] = None,
+             queries: Optional[Dict[str, Any]] = None
+             ) -> Any:
+        kwargs = {}
+
+        if arguments:
+            kwargs['arguments'] = arguments
+        if queries:
+            kwargs['queries'] = queries
+        return self.__call('call', args=(command,), kwargs=kwargs)
+
+
+class APISingleTreadWorkerCommand(NamedTuple):
+    path: str
+    action: str
+    args: Tuple[Any]
+    kwargs: Dict[str, Any]
+
+
+class APISingleTreadWorker(Thread):
+    def __init__(
+            self,
+            queue_in: "Queue[APISingleTreadWorkerCommand]",
+            queue_out: "Queue[Any]",
+    ):
+        self.__queue_in = queue_in
+        self.__queue_out = queue_out
+        super().__init__(daemon=True)
+
+    def run(self) -> None:
+        while True:
+            try:
+                command = self.__queue_in.get()
+                print("[CALL]", command.path, command.action, command.args, command.kwargs, file=stderr)
+                resource = APIMultithread.call(command.path)
+                output = resource.__getattribute__(command.action)(*command.args, **command.kwargs)
+                # print('... ', output, file=stderr)
+                self.__queue_out.put(output)
+                if API_SLEEP_TIME:
                     sleep(API_SLEEP_TIME)
-                    cls.__sleep_command_lock.release()
+            except Exception as e:
+                self.__queue_out.put(e)
 
-                Thread(target=unlock_time).start()
+
+class APISingleTread:
+    def __init__(self):
+        self.__queue_in: Queue[APISingleTreadWorkerCommand] = Queue(1)
+        self.__queue_out: Queue[Any] = Queue(1)
+        self.__lock_command = Lock()
+        APISingleTreadWorker(self.__queue_in, self.__queue_out).start()
+        APIMultithread.watchdog_start()
+
+    @property
+    def address(self) -> str:
+        return APIMultithread.get_address()
+
+    @property
+    def is_ready(self) -> bool:
+        return APIMultithread.is_ready()
+
+    def call(self, path: str) -> APISingleThreadPath:
+        return APISingleThreadPath(path, self.__queue_in, self.__queue_out, self.__lock_command)
+
+
+API = APISingleTread()
