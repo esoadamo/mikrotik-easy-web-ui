@@ -26,7 +26,7 @@ class Limit(NamedTuple):
         return f"Limit({self.ip=}, {usage=} %, {max_rate=}, {rate=})"
 
 
-class DictAverage(Generic[T]):
+class DictWAverage(Generic[T]):
     def __init__(self, n: int) -> None:
         self.__n = n
         self.__data: Dict[T, deque[float]] = {}
@@ -41,7 +41,7 @@ class DictAverage(Generic[T]):
 
     def __getitem__(self, item: T) -> float:
         data = self.__data[item]
-        return sum(data) / self.__n
+        return sum([(i + 1) * x for i, x in enumerate(data)]) / sum([(i + 1) for i, _ in enumerate(data)])
 
     def __iter__(self) -> Iterator[Tuple[T, float]]:
         return map(
@@ -62,8 +62,8 @@ class Balancer(Thread):
         self.__name_prefix = f"balancer_{'download' if not direction_upload else 'upload'}_{self.__ip_prefix}"
         self.__direction_upload = direction_upload
         self.__api: API = api
-        self.__queues_history: DictAverage[int] = DictAverage(n=3)
-        self.__queues_history_long: DictAverage[int] = DictAverage(n=60)
+        self.__queues_history: DictWAverage[int] = DictWAverage(n=3)
+        self.__queues_history_long: DictWAverage[int] = DictWAverage(n=60)
         self.__queues_priority: Dict[int, int] = {}
         self.__watched_ips: Optional[Set[int]] = None
 
