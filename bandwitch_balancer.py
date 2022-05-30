@@ -65,6 +65,7 @@ class Balancer(Thread):
         self.__queues_history: DictAverage[int] = DictAverage(n=3)
         self.__queues_history_long: DictAverage[int] = DictAverage(n=60)
         self.__queues_priority: Dict[int, int] = {}
+        self.__watched_ips: Optional[Set[int]] = None
 
         self.__mark_cache: Dict[int, int] = {}
         self.__mark_cache_time: int = 0
@@ -81,18 +82,39 @@ class Balancer(Thread):
     def get_queue_priority(self, ip: int) -> int:
         return self.__queues_priority.get(ip, 100)
 
-    def __init_marks(self) -> None:
-        existing_marks: Set[str] = set(map(
-            lambda x: x['new-packet-mark'],
-            filter(
+    @property
+    def watched_ips(self) -> Optional[Set[int]]:
+        return set(self.__watched_ips) if self.__watched_ips is not None else None
+
+    @watched_ips.setter
+    def watched_ips(self, value: Optional[Set[int]]):
+        if value == self.__watched_ips:
+            return
+        if value is None:
+            self.__watched_ips = None
+        else:
+            self.__watched_ips = set(value)
+        self.__init_marks()
+
+    def __init_marks(self, ) -> None:
+        existing_marks: Dict[str, Tuple[str, bool]] = {
+            x['new-packet-mark']: (x['id'], x['disabled'] == 'false')
+            for x in filter(
                 lambda x: x.get('new-packet-mark'),
                 self.__api.call('ip/firewall/mangle').get()
             )
-        ))
+        }
 
         for i in range(1, 255):
             ip, mark_name = self.__ip_mark_name(i)
             if mark_name in existing_marks:
+                if self.__watched_ips is not None:
+                    mark_id, mark_enabled = existing_marks[mark_name]
+                    is_watched = i in self.__watched_ips
+                    if is_watched and not mark_enabled:
+                        self.__api.call('ip/firewall/mangle').set(id=mark_id, disabled="false")
+                    elif not is_watched and mark_enabled:
+                        self.__api.call('ip/firewall/mangle').set(id=mark_id, disabled="true")
                 continue
             addr_local = f'{ip}/32' if i != 0 else f'{ip}/24'
             addr_lan = f'!{self.__ip_prefix}.0/24'

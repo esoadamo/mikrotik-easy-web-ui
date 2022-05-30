@@ -671,6 +671,15 @@ def thread_arp_watch() -> None:
         sleep(5 * 60 + randint(0, 280))
 
 
+@retry_on_error
+def thread_balancer_get_watched_ips():
+    while True:
+        active_ips = {int(x[0].rsplit('.', 1)[1]) for x in get_clients() if x[0].startswith(BALANCER_IP_PREFIX)}
+        BALANCERS['up'].watched_ips = active_ips
+        BALANCERS['down'].watched_ips = active_ips
+        sleep(10 * 60 + randint(1, 10) * 60)
+
+
 def main() -> int:
     log("[MAIN] starting up")
     if not API.is_ready:
@@ -710,7 +719,9 @@ def main() -> int:
             suppress_output=True
         )
         BALANCERS['up'].start()
+        sleep(2.5)
         BALANCERS['down'].start()
+        Thread(target=thread_balancer_get_watched_ips, daemon=True).start()
     log(f"[MAIN] Starting web server @ http://127.0.0.1:{WEB_PORT}")
     http_server = WSGIServer(('127.0.0.1', int(WEB_PORT)), app)
     try:
