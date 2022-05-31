@@ -4,3 +4,4 @@ RouterOS-api
 requests
 python-dotenv
 gevent
+git+https://github.com/esoadamo/Python-SQLiteDB.git

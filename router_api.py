@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from threading import Lock, get_ident, Thread
 from time import sleep, time
 from queue import Queue
@@ -9,10 +10,12 @@ from routeros_api.api import RouterOsApi, RouterOsApiPool
 from routeros_api.exceptions import RouterOsApiError
 from routeros_api.resource import RouterOsResource
 from dotenv import load_dotenv
+from sqlitedb.indexedb import IndexedDB, IndexedDBManager
 
 load_dotenv()
 
 API_SLEEP_TIME = float(os.getenv('API_SLEEP_TIME', '0'))
+API_COMMAND_TIME_CACHE = os.getenv('API_COMMAND_TIME_CACHE')
 
 
 class APICredentials(NamedTuple):
@@ -129,13 +132,28 @@ class APIMultithread:
         return api.get_resource(path)
 
 
+APISingleThreadQIn = "Queue[APISingleTreadWorkerCommand]"
+APISingleThreadQOut = "Queue[Tuple[Any, float]]"
+
+
 class APISingleThreadPath:
-    def __init__(self, path: str, queue_in: Queue, queue_out: Queue, lock_command: Lock):
+    def __init__(
+            self,
+            path: str,
+            queue_in: APISingleThreadQIn,
+            queue_out: APISingleThreadQOut,
+            lock_command: Lock,
+            command_time_cache: Optional[IndexedDB] = None
+    ):
         self.__path = path
+        if not self.__path.startswith('/'):
+            self.__path = "/" + self.__path
         self.__queue_in = queue_in
         self.__queue_out = queue_out
         self.__lock_command = lock_command
+        self.__command_time_cache = command_time_cache
         self.__wait_time = 0.0
+        self.__processing_time = 0.0
 
     @property
     def wait_time(self) -> float:
@@ -153,7 +171,8 @@ class APISingleThreadPath:
         with self.__lock_command:
             self.__queue_in.put(command)
             self.__wait_time = time() - time_start
-            output = self.__queue_out.get()
+            output, self.__processing_time = self.__queue_out.get()
+            self.__save_call_to_time_cache(self.__processing_time, action, args, kwargs)
             if isinstance(output, Exception):
                 raise output
             return output
@@ -180,6 +199,35 @@ class APISingleThreadPath:
             kwargs['queries'] = queries
         return self.__call('call', args=(command,), kwargs=kwargs)
 
+    def __save_call_to_time_cache(self, time_taken: float, action: str, args: Tuple[Any] = (),
+                                  kwargs: Optional[Dict[str, Any]] = None) -> None:
+        if self.__command_time_cache is None:
+            return
+        call_str = self.__call_to_str(action, args, kwargs)
+        key_time = f"avg time of {call_str}"
+        key_count = f"number of samples of {call_str}"
+
+        avg_time: float = self.__command_time_cache.get(key_time, 0.0)
+        avg_count: int = self.__command_time_cache.get(key_count, 0)
+
+        if avg_count > 0:
+            avg_time *= avg_count
+        avg_time += time_taken
+        avg_count += 1
+
+        avg_time /= avg_count
+        self.__command_time_cache[key_time] = avg_time
+        self.__command_time_cache[key_count] = avg_count
+
+    def __call_to_str(self, action: str, args: Tuple[Any] = (), kwargs: Optional[Dict[str, Any]] = None) -> str:
+        return f"{self.__path}: {action}" + (
+            ("  with" + (
+                f" {len(args)} args" if args else ""
+            ) + (
+                 f" and {', '.join(sorted(kwargs.keys()))} params" if kwargs else ""
+             )) if args or kwargs else ""
+        )
+
 
 class APISingleTreadWorkerCommand(NamedTuple):
     path: str
@@ -191,8 +239,8 @@ class APISingleTreadWorkerCommand(NamedTuple):
 class APISingleTreadWorker(Thread):
     def __init__(
             self,
-            queue_in: "Queue[APISingleTreadWorkerCommand]",
-            queue_out: "Queue[Any]",
+            queue_in: APISingleThreadQIn,
+            queue_out: APISingleThreadQOut,
     ):
         self.__queue_in = queue_in
         self.__queue_out = queue_out
@@ -202,22 +250,27 @@ class APISingleTreadWorker(Thread):
         while True:
             try:
                 command = self.__queue_in.get()
-                print("[CALL]", command.path, command.action, command.args, command.kwargs, file=stderr)
+                # print("[CALL]", command.path, command.action, command.args, command.kwargs, file=stderr)
+                time_start = time()
                 resource = APIMultithread.call(command.path)
                 output = resource.__getattribute__(command.action)(*command.args, **command.kwargs)
+                time_taken = time() - time_start
                 # print('... ', output, file=stderr)
-                self.__queue_out.put(output)
+                self.__queue_out.put((output, time_taken))
                 if API_SLEEP_TIME:
                     sleep(API_SLEEP_TIME)
             except Exception as e:
-                self.__queue_out.put(e)
+                self.__queue_out.put((e, 0.0))
 
 
 class APISingleTread:
-    def __init__(self):
-        self.__queue_in: Queue[APISingleTreadWorkerCommand] = Queue(1)
-        self.__queue_out: Queue[Any] = Queue(1)
+    def __init__(self, command_time_cache_path: Optional[Path] = None):
+        self.__queue_in: APISingleThreadQIn = Queue(1)
+        self.__queue_out: APISingleThreadQOut = Queue(1)
         self.__lock_command = Lock()
+        self.__database_manager = IndexedDBManager(
+            command_time_cache_path) if command_time_cache_path is not None else None
+        self.__database = self.__database_manager['commands_time'] if self.__database_manager is not None else None
         APISingleTreadWorker(self.__queue_in, self.__queue_out).start()
         APIMultithread.watchdog_start()
 
@@ -230,7 +283,7 @@ class APISingleTread:
         return APIMultithread.is_ready()
 
     def call(self, path: str) -> APISingleThreadPath:
-        return APISingleThreadPath(path, self.__queue_in, self.__queue_out, self.__lock_command)
+        return APISingleThreadPath(path, self.__queue_in, self.__queue_out, self.__lock_command, self.__database)
 
 
-API = APISingleTread()
+API = APISingleTread(Path(API_COMMAND_TIME_CACHE) if API_COMMAND_TIME_CACHE is not None else None)
